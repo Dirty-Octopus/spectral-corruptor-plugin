@@ -1,0 +1,50 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "mac-debug",
+            "displayName": "macOS Debug",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/Builds/mac-debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64"
+            },
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
+        },
+        {
+            "name": "mac-release",
+            "displayName": "macOS Release",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/Builds/mac-release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64"
+            },
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
+        },
+        {
+            "name": "win-debug",
+            "displayName": "Windows Debug",
+            "generator": "Visual Studio 17 2022",
+            "binaryDir": "${sourceDir}/Builds/win-debug",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" },
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+        },
+        {
+            "name": "win-release",
+            "displayName": "Windows Release",
+            "generator": "Visual Studio 17 2022",
+            "binaryDir": "${sourceDir}/Builds/win-release",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" },
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+        }
+    ],
+    "buildPresets": [
+        { "name": "mac-debug",   "configurePreset": "mac-debug" },
+        { "name": "mac-release", "configurePreset": "mac-release" },
+        { "name": "win-debug",   "configurePreset": "win-debug" },
+        { "name": "win-release", "configurePreset": "win-release" }
+    ]
+}

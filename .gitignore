@@ -1,0 +1,14 @@
+Builds/
+build/
+build-*/
+.DS_Store
+.idea/
+.vscode/
+Source/FactoryPresets.h
+*.sclicense
+*.pem
+*.key
+LocalLicenseIssuer/
+.license-keys/
+presets/**/*.scpreset
+presets/*.scpreset

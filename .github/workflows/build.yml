@@ -1,0 +1,72 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    name: macOS (VST3 + AU + Standalone)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure (Release)
+        run: cmake --preset mac-release
+
+      - name: Build
+        run: cmake --build Builds/mac-release --config Release
+
+      - name: Test
+        run: ctest --test-dir Builds/mac-release --output-on-failure
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpectralCrrpt_VST3_mac
+          path: Builds/mac-release/SpectralCrrpt_artefacts/Release/VST3/*
+
+      - name: Upload AU
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpectralCrrpt_AU_mac
+          path: Builds/mac-release/SpectralCrrpt_artefacts/Release/AU/*
+
+      - name: Upload Standalone
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpectralCrrpt_Standalone_mac
+          path: Builds/mac-release/SpectralCrrpt_artefacts/Release/Standalone/*
+
+  build-windows:
+    name: Windows (VST3)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure (Release, Ninja)
+        run: cmake -B Builds/win-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build Builds/win-release
+
+      - name: Test
+        run: ctest --test-dir Builds/win-release --output-on-failure
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpectralCrrpt_VST3_win
+          path: Builds/win-release/SpectralCrrpt_artefacts/Release/VST3/*
