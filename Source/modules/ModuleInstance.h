@@ -33,6 +33,7 @@ namespace scrr::dsp {
 
 inline std::unique_ptr<SpectralModule> createModule (const juce::String& typeId)
 {
+    if (typeId == "Notes") return nullptr; // Preset documentation has no DSP instance.
     if (typeId == "BinShuffle")          return std::make_unique<BinShuffle>();
     if (typeId == "RandomBinDeath")      return std::make_unique<RandomBinDeathModule>();
     if (typeId == "SpectralDropout")     return std::make_unique<SpectralDropoutModule>();

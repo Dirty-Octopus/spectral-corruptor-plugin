@@ -9,3 +9,7 @@ JUCE is a Git submodule pinned to 8.0.4. Its modules are dual-licensed under AGP
 - [Mozilla MPL-2.0](https://www.mozilla.org/MPL/2.0/)
 
 JUCE carries additional dependency notices, including the SDKs and codecs it incorporates. Retain those notices and review the terms applicable to the platform and format you distribute.
+
+## MD4C
+
+Notes uses MD4C 0.5.2, pinned to commit `729e6b8b320caa96328968ab27d7db2235e4fb47`, under the MIT licence. The unmodified parser and its licence are included in `third_party/md4c/`. See [upstream](https://github.com/mity/md4c) and [licence](third_party/md4c/LICENSE.md).

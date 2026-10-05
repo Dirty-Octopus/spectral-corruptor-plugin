@@ -13,7 +13,7 @@ public:
     { setComponentID ("stage-" + uid); setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
     std::function<void()> choose;
     std::function<void(const juce::MouseEvent&)> contextMenu;
-    bool generic {};
+    bool generic {}, notes {};
     std::function<void(juce::Point<int>, bool, bool)> drag;
     juce::String uid;
     void tick (float dt)
@@ -29,7 +29,7 @@ public:
         const auto ink = selected ? Theme::black() : enabled ? Theme::white() : Theme::dim();
         Theme::text (g, juce::String (position + 1).paddedLeft ('0', 2), { 10, 6, 26, 28 }, 18, ink, true);
         Theme::text (g, title, { 42 + (int) (hover * 3), 4, getWidth() - 58, 30 }, 13, ink, true);
-        Theme::text (g, (generic ? "GENERIC / " : "FFT / ") + juce::String (enabled ? "ON" : "OFF"), { 43, 33, 120, 15 }, 9, ink, true);
+        Theme::text (g, notes ? juce::String ("NOTES / TEXT") : (generic ? "GENERIC / " : "FFT / ") + juce::String (enabled ? "ON" : "OFF"), { 43, 33, 120, 15 }, 9, ink, true);
         g.setColour (ink.withAlpha (.6f));
         for (int y = 35; y < 45; y += 4) g.fillRect (getWidth() - 24, y, 11, 1);
         if (selected) { g.setColour (enabled ? Theme::red() : Theme::line()); g.fillRect (0, 0, 4, getHeight() - 2); }

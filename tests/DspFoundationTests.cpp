@@ -187,6 +187,8 @@ TEST_CASE ("All modules are transparent when disabled or amount is zero")
     {
         auto state = scrr::dsp::createDefaultModuleState (spec.typeId);
         auto module = scrr::dsp::createModule (spec.typeId);
+        if (spec.typeId == "Notes")
+        { REQUIRE (module == nullptr); REQUIRE (spec.params.empty()); continue; }
         REQUIRE (module != nullptr);
 
         module->prepare (44100.0, (int) original.size());

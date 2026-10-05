@@ -242,6 +242,7 @@ inline const std::vector<ModuleSpec>& getModuleSpecs()
         makeFloat ("tone", "Tone", 200, 20000, 16000, 1, " Hz", true),
         makeFloat ("output", "Output", -36, 12, -6, .1f, " dB"),
         makeFloat ("mix", "Mix", 0, 100, 100, .1f, " %") });
+    add ("Notes", "Notes", {});
     return result;
     }();
     return specs;
@@ -260,6 +261,7 @@ inline juce::ValueTree createDefaultModuleState (const juce::String& typeId)
     auto vt = juce::ValueTree ("module");
     vt.setProperty ("type", typeId, nullptr);
     vt.setProperty ("enabled", false, nullptr);
+    if (typeId == "Notes") vt.setProperty ("notes", juce::String(), nullptr);
 
     if (auto* spec = findModuleSpec (typeId))
         for (const auto& p : spec->params)

@@ -12,6 +12,7 @@
 #include "AssignableSlider.h"
 #include "PresetBar.h"
 #include "EffectCard.h"
+#include "NotesPanel.h"
 #include "EffectBrowser.h"
 #include "ModuleRow.h"
 #include "components/ParameterPanel.h"
@@ -77,6 +78,7 @@ private:
     juce::ToggleButton enabled { "ENABLED" };
     juce::Label orderNotice;
     EffectCard card;
+    NotesPanel notesPanel;
     EffectBrowser browser;
     juce::Viewport rackViewport, inspectorViewport, masterViewport;
     PaintedPanel masterContent;

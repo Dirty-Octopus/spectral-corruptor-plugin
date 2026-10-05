@@ -1525,6 +1525,91 @@ TEST_CASE ("Modulation card right-click assigns and removes macros using the exi
     juce::PopupMenu::dismissAllActiveMenus();
 }
 
+TEST_CASE ("Notes renders Markdown headings, emphasis, code, lists and Unicode natively")
+{
+    const auto markdown = juce::String::fromUTF8 (u8"# 使用说明\n\n**Bold** and *italic* and `code`\n\n- First\n- [x] Ready\n\n3. Third\n\n> Quote\n\n```\nM1 = 50%\n```\n\n[Guide](https://example.invalid) &amp; &#x4e2d;\n\n<script>plain text</script>");
+    const auto rendered = scrr::gui::renderNotesMarkdown (markdown);
+    const auto text = rendered.getText();
+    REQUIRE (text.contains (juce::String::fromUTF8 (u8"使用说明"))); REQUIRE (! text.contains ("**"));
+    REQUIRE (text.contains ("Bold and italic and code")); REQUIRE (text.contains ("3. Third"));
+    REQUIRE (text.contains ("M1 = 50%")); REQUIRE (text.contains (juce::String::fromUTF8 (u8"& 中")));
+    REQUIRE (text.contains ("<script>plain text</script>"));
+    bool heading = false, bold = false, italic = false, link = false;
+    for (int i = 0; i < rendered.getNumAttributes(); ++i)
+    {
+        const auto& font = rendered.getAttribute (i).font;
+        heading |= font.getHeight() > 20; bold |= font.isBold(); italic |= font.isItalic(); link |= font.isUnderlined();
+    }
+    REQUIRE (heading); REQUIRE (bold); REQUIRE (italic); REQUIRE (link);
+}
+
+TEST_CASE ("Notes survives preset files, host state, copy and cross-channel moves with its text and position")
+{
+    auto p = testProcessor(); p->addModule (1, "SpectralFilter"); p->addModule (1, "Delay"); p->addModule (1, "Notes");
+    auto chain = p->getModuleChain (1); const auto uid = chain.getChild (2)["uid"].toString();
+    const auto text = juce::String::fromUTF8 (u8"# 预设说明\n\nTurn **M1** up slowly.\n\n- 输入鼓组\n- Mix = 50%\n\n`<keep> & \"quotes\"`\n");
+    p->setPresetDirty (false); p->setModuleParameter (1, uid, "notes", text); REQUIRE (p->isPresetDirty());
+    p->assignMacro (0, 1, uid, "moduleMix"); REQUIRE (p->getMacroMappings().empty());
+    REQUIRE (p->transferModule (1, uid, 1, 1, false) == uid);
+    auto preset = p->copyPresetState(); auto restored = testProcessor(); REQUIRE (restored->applyPreset (preset));
+    chain = restored->getModuleChain (1); REQUIRE (chain.getChild (1)["type"].toString() == "Notes");
+    REQUIRE (chain.getChild (1)["notes"].toString() == text);
+    juce::MemoryBlock host; p->getStateInformation (host); restored->setStateInformation (host.getData(), (int) host.getSize());
+    REQUIRE (restored->getModuleChain (1).getChild (1)["notes"].toString() == text);
+    const auto directory = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("spectral-notes-" + juce::Uuid().toString());
+    { scrr::PresetManager manager (directory); REQUIRE (manager.saveToUser ("Notes test", preset).wasOk());
+      auto xml = juce::XmlDocument::parse (directory.getChildFile ("Notes test.scpreset")); REQUIRE (xml != nullptr);
+      REQUIRE (restored->applyPreset (juce::ValueTree::fromXml (*xml))); }
+    directory.deleteRecursively(); REQUIRE (restored->getModuleChain (1).getChild (1)["notes"].toString() == text);
+    const auto pasted = p->pasteModule (2, p->copyModule (1, uid)); REQUIRE (pasted.isNotEmpty()); REQUIRE (pasted != uid);
+    REQUIRE (p->getModuleChain (2).getChild (0)["notes"].toString() == text);
+    REQUIRE (p->transferModule (2, pasted, 4, -1, false) == pasted); REQUIRE (p->getModuleChain (2).getNumChildren() == 0);
+    REQUIRE (p->getModuleChain (4).getChild (0)["notes"].toString() == text);
+}
+
+TEST_CASE ("Adding, editing, moving and deleting Notes leaves live audio and effect history identical")
+{
+    auto baseline = testProcessor(), notes = testProcessor();
+    for (auto* p : { baseline.get(), notes.get() })
+    { p->addModule (1, "SpectralFilter"); p->addModule (1, "Delay"); p->prepareToPlay (48000, 128); }
+    juce::AudioBuffer<float> original (2, 128), actual (2, 128); juce::MidiBuffer midi; juce::String uid;
+    for (int block = 0; block < 150; ++block)
+    {
+        if (block == 30) { notes->addModule (1, "Notes"); uid = notes->getModuleChain (1).getChild (2)["uid"].toString(); }
+        if (block == 40) notes->setModuleParameter (1, uid, "notes", "# Instructions\n\nKeep the delay tail.");
+        if (block == 50) REQUIRE (notes->transferModule (1, uid, 1, 0, false) == uid);
+        if (block == 60) REQUIRE (notes->transferModule (1, uid, 4, -1, false) == uid);
+        if (block == 70) notes->setModuleParameter (4, uid, "enabled", false);
+        if (block == 80) notes->removeModule (4, 0);
+        for (int c = 0; c < 2; ++c) for (int i = 0; i < 128; ++i)
+        {
+            const float input = block < 90 ? .1f * std::sin ((float) (block * 128 + i) * .05f) : 0;
+            original.setSample (c, i, input); actual.setSample (c, i, input);
+        }
+        baseline->processBlock (original, midi); notes->processBlock (actual, midi);
+        for (int c = 0; c < 2; ++c) REQUIRE (std::memcmp (original.getReadPointer (c), actual.getReadPointer (c), 128 * sizeof (float)) == 0);
+        REQUIRE (baseline->getLatencySamples() == notes->getLatencySamples());
+    }
+}
+
+TEST_CASE ("Notes is a single editable Markdown area with preview, independent of effect controls")
+{
+    auto p = testProcessor(); p->addModule (1, "Notes"); const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString();
+    auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor()); editor->setSize (1040, 780);
+    auto* panel = findID (*editor, "notes-panel"); REQUIRE (panel != nullptr); REQUIRE (panel->isVisible());
+    auto* text = dynamic_cast<juce::TextEditor*> (findID (*panel, "notes-editor")); REQUIRE (text != nullptr); REQUIRE (text->isVisible());
+    text->setText ("# How to use\n\n**M1** controls the rate.");
+    REQUIRE (waitForUI ([&] { return p->getModuleChain (1).getChild (0)["notes"].toString().contains ("M1"); }));
+    findButton (*panel, "PREVIEW")->triggerClick(); pump (40);
+    REQUIRE (! text->isVisible()); REQUIRE (findID (*panel, "notes-preview")->isShowing() == panel->isShowing());
+    REQUIRE (! findID (*editor, "effect-card")->isVisible()); REQUIRE (! findButton (*editor, "ENABLED")->isVisible());
+    editor.reset(); editor.reset (p->createEditor()); panel = findID (*editor, "notes-panel");
+    REQUIRE (! findID (*panel, "notes-editor")->isVisible());
+    findButton (*panel, "EDIT")->triggerClick(); pump (40); REQUIRE (findID (*panel, "notes-editor")->isVisible());
+    p->setModuleParameter (1, uid, "notes", juce::String::repeatedString ("x", 65540));
+    REQUIRE (p->getModuleChain (1).getChild (0)["notes"].toString().length() == 65536);
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
@@ -1695,6 +1780,10 @@ int main (int argc, char** argv)
         row = findID (*editor, "stage-" + jpegUid); row->mouseUp (mouse (*row, { 50, 20 }));
         for (int frame = 0; frame < 15; ++frame)
         { pump (25); capture ("transition-" + juce::String (frame).paddedLeft ('0', 2)); }
+        p.addModule (2, "Notes"); const auto noteId = p.getModuleChain (2).getChild (0)["uid"].toString();
+        p.setModuleParameter (2, noteId, "notes", juce::String::fromUTF8 (u8"# Preset guide / 使用说明\n\n**Motion / M1** controls the modulation rate.\n\n1. Start with a drum loop.\n2. Turn M1 up slowly.\n3. Adjust *Tone* to taste.\n\n> Keep the input below clipping.\n\n- [x] Works with host automation\n- [ ] Try a different LFO shape\n\n```\nM1: 25–75%\nDry / Wet: 50%\n```\n\n说明会随预设保存。"));
+        findButton (*editor, "CH 2")->triggerClick(); pump (350); capture ("notes-preview");
+        findButton (*findID (*editor, "notes-panel"), "EDIT")->triggerClick(); pump (100); capture ("notes-editor");
         p.addModule (4, "FrequencyShift"); p.addModule (4, "Delay"); pump (100); findButton (*editor, "CH 4")->triggerClick(); pump (320);
         const auto fourth = p.getModuleChain (4);
         auto* fftRow = findID (*editor, "stage-" + fourth.getChild (0)["uid"].toString());

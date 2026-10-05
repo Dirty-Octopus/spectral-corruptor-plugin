@@ -89,7 +89,7 @@ bool SpectralCrrptProcessor::describeMacroTarget (MacroMapping& m) const
     for (auto child : rackState.getChildWithName ("ch" + juce::String (m.channel)))
     {
         if (child["uid"].toString() != m.uid) continue;
-        auto* spec = scrr::dsp::findModuleSpec (child["type"].toString()); if (! spec) return false;
+        auto* spec = scrr::dsp::findModuleSpec (child["type"].toString()); if (! spec || spec->typeId == "Notes") return false;
         auto accept = [&] (const scrr::dsp::ParamSpec& p)
         {
             m.minimum = p.minVal; m.maximum = p.maxVal; m.step = p.step; m.logarithmic = p.logScale; m.unit = p.unit;

@@ -74,6 +74,8 @@ target_sources(SpectralCrrpt PRIVATE
     Source/modules/SpectralModule.cpp
     Source/gui/AssetCache.cpp
     Source/gui/Skin.cpp
+    Source/gui/NotesPanel.cpp
+    third_party/md4c/md4c.c
     Source/gui/EditorContent.cpp
     Source/gui/PresetBar.cpp
     Source/gui/components/SpectralKnob.cpp
@@ -81,6 +83,13 @@ target_sources(SpectralCrrpt PRIVATE
     Source/gui/components/SpectralToggle.cpp
     Source/gui/components/SpectrumDisplay.cpp
 )
+
+# Keep the unmodified third-party C parser out of JUCE's C++ warning policy.
+if(MSVC)
+    set_source_files_properties(third_party/md4c/md4c.c PROPERTIES COMPILE_OPTIONS /w)
+else()
+    set_source_files_properties(third_party/md4c/md4c.c PROPERTIES COMPILE_OPTIONS -w)
+endif()
 
 if(MSVC)
     # Prompt translations and their regression fixtures contain UTF-8 literals.

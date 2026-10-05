@@ -100,6 +100,8 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
         juce::MessageManager::callAsync ([safe] { if (safe) safe->rebuildRack(); });
     };
     addAndMakeVisible (enabled);
+    notesPanel.changed = [this] (const juce::String& text) { processor.setModuleParameter (channel, selectedUid, "notes", text); };
+    addChildComponent (notesPanel);
     orderNotice.setComponentID ("chain-order-notice");
     orderNotice.setText (promptText ("GENERIC EFFECTS MUST STAY AT THE END OF THE CHAIN"), juce::dontSendNotification);
     orderNotice.setFont (Theme::font (14, true)); orderNotice.setJustificationType (juce::Justification::centred);
@@ -366,7 +368,7 @@ void EditorContent::rebuildRack()
         if (! spec) continue;
         const auto uid = child["uid"].toString();
         auto row = std::make_unique<ModuleRow> (spec->displayName, uid, i, (bool) child["enabled"], selected == i);
-        row->generic = scrr::dsp::isGenericEffect (spec->typeId);
+        row->generic = scrr::dsp::isGenericEffect (spec->typeId); row->notes = spec->typeId == "Notes";
         row->contextMenu = [safe, uid] (const juce::MouseEvent& event)
         { if (safe) safe->chainContextMenu (uid, event.getEventRelativeTo (safe.getComponent()).getPosition()); };
         row->choose = [safe, uid]
@@ -405,12 +407,18 @@ void EditorContent::rebuildInspector()
     shownFrequencyLimit = processor.getFrequencyLimit();
     controls.clear(); common.clear(); selectedName.clear(); selectedDescription.clear();
     const bool valid = selected >= 0;
+    notesPanel.setVisible (false); inspectorViewport.setVisible (true);
     card.setVisible (valid);
     enabled.setVisible (valid);
     if (! valid) { updateRange(); return; }
     auto child = displayedChain.getChild (selected); auto type = child["type"].toString();
     auto* spec = scrr::dsp::findModuleSpec (type); if (! spec) return;
     selectedName = spec->displayName; selectedDescription = moduleDescription (type);
+    if (type == "Notes")
+    {
+        card.setVisible (false); enabled.setVisible (false); inspectorViewport.setVisible (false);
+        notesPanel.setDocument (selectedUid, child["notes"].toString()); notesPanel.setVisible (true); updateRange(); return;
+    }
     enabled.setToggleState ((bool) child["enabled"], juce::dontSendNotification);
     const bool effectActive = (bool) child["enabled"];
     card.setEffect (type, selectedName, selected + 1, effectActive);
@@ -465,6 +473,8 @@ void EditorContent::rebuildInspector()
 void EditorContent::updateRange()
 {
     auto child = displayedChain.getChild (selected);
+    if (child["type"].toString() == "Notes")
+    { inputSpectrum.setRange (0, shownFrequencyLimit, false); outputSpectrum.setRange (0, shownFrequencyLimit, false); return; }
     const float low = (float) processor.getEffectiveValue (channel, selectedUid, "rangeLow", (double) child.getProperty ("rangeLow", 0.0));
     const float high = (float) processor.getEffectiveValue (channel, selectedUid, "rangeHigh", (double) child.getProperty ("rangeHigh", 96000.0));
     const bool active = (bool) child.getProperty ("enabled", true);
@@ -513,7 +523,7 @@ void EditorContent::dragStage (const juce::String& uid, juce::Point<int> screen,
         const auto moving = displayedChain.getChildWithProperty ("uid", uid);
         const bool generic = scrr::dsp::isGenericEffect (moving["type"].toString());
         const int requested = juce::jlimit (0, displayedChain.getNumChildren(), (dragPoint.y - rackViewport.getY() + rackViewport.getViewPositionY() + 28) / 56);
-        invalidOrder = generic ? requested < boundary : requested > boundary;
+        invalidOrder = moving["type"].toString() != "Notes" && (generic ? requested < boundary : requested > boundary);
         if (invalidOrder)
         {
             orderNoticeUntil = juce::Time::getMillisecondCounterHiRes() + 2400;
@@ -605,7 +615,7 @@ void EditorContent::resized()
     for (auto& row : rows) { row->setBounds (0, y, rowWidth, 56); y += 56; }
     rack.setSize (rowWidth, juce::jmax (y, chain.getHeight()));
     auto detail = detailArea.reduced (14, 0); moduleHeader = detail.removeFromTop (140);
-    card.setBounds (moduleHeader); detail.removeFromTop (7);
+    card.setBounds (moduleHeader); notesPanel.setBounds (detailArea.reduced (14, 10)); detail.removeFromTop (7);
     auto actions = detail.removeFromTop (25); enabled.setBounds (actions.removeFromLeft (115)); detail.removeFromTop (9);
     browser.setBounds (detailArea);
     orderNotice.setBounds (detailArea.reduced (14, 0).withTrimmedTop (10).withHeight (48));

@@ -11,6 +11,7 @@ const juce::String chainNames[] = { "modules", "ch1", "ch2", "ch3", "ch4" };
 constexpr int maxModulesPerChain = 32;
 int stageInsertion (const juce::ValueTree& chain, const juce::ValueTree& module, int requested)
 {
+    if (module["type"].toString() == "Notes") return juce::jlimit (0, chain.getNumChildren(), requested < 0 ? chain.getNumChildren() : requested);
     int boundary = 0;
     while (boundary < chain.getNumChildren() && ! scrr::dsp::isGenericEffect (chain.getChild (boundary)["type"].toString())) ++boundary;
     const bool generic = scrr::dsp::isGenericEffect (module["type"].toString());
@@ -19,9 +20,11 @@ int stageInsertion (const juce::ValueTree& chain, const juce::ValueTree& module,
 }
 void orderStages (juce::ValueTree chain)
 {
-    int position = 0;
-    for (int i = 0; i < chain.getNumChildren(); ++i)
-        if (! scrr::dsp::isGenericEffect (chain.getChild (i)["type"].toString())) chain.moveChild (i, position++, nullptr);
+    std::vector<juce::ValueTree> originals, effects;
+    for (auto child : chain) { originals.push_back (child); if (child["type"].toString() != "Notes") effects.push_back (child); }
+    std::stable_partition (effects.begin(), effects.end(), [] (auto child) { return ! scrr::dsp::isGenericEffect (child["type"].toString()); });
+    chain.removeAllChildren (nullptr); size_t index = 0;
+    for (auto child : originals) chain.appendChild (child["type"].toString() == "Notes" ? child : effects[index++], nullptr);
 }
 juce::ValueTree cleanModule (const juce::ValueTree& source)
 {
@@ -31,6 +34,7 @@ juce::ValueTree cleanModule (const juce::ValueTree& source)
     auto result = scrr::dsp::createDefaultModuleState (type);
     result.setProperty ("uid", juce::Uuid().toString(), nullptr);
     result.setProperty ("enabled", (bool) source.getProperty ("enabled", false), nullptr);
+    if (type == "Notes") result.setProperty ("notes", source["notes"].toString().substring (0, 65536), nullptr);
     for (const auto& p : spec->params)
     {
         auto value = (double) source.getProperty (p.id, p.defaultVal);
@@ -83,7 +87,11 @@ void SpectralCrrptProcessor::publishRack (bool structural)
 {
     auto next = std::make_shared<RackSnapshot>();
     for (int i = 0; i < 5; ++i)
-        next->chains[(size_t) i] = rackState.getChildWithName (chainNames[i]).createCopy();
+    {
+        next->chains[(size_t) i] = juce::ValueTree (chainNames[i]);
+        for (auto module : rackState.getChildWithName (chainNames[i]))
+            if (module["type"].toString() != "Notes") next->chains[(size_t) i].appendChild (module.createCopy(), nullptr);
+    }
     for (auto& mapping : macroMappings) describeMacroTarget (mapping);
     next->mappings = macroMappings; next->sources = modulators;
     std::atomic_store (&publishedRack, std::shared_ptr<const RackSnapshot> (std::move (next)));
@@ -237,7 +245,7 @@ void SpectralCrrptProcessor::setModuleParameter (int channel, const juce::String
             if (! clean.hasProperty (key)) return;
             module.setProperty (key, clean[key], nullptr);
             presetDirty.store (true);
-            publishRack (false);
+            if (module["type"].toString() != "Notes" || key != juce::Identifier ("notes")) publishRack (false);
             return;
         }
 }

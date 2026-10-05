@@ -8,6 +8,7 @@
 namespace scrr::gui {
 inline juce::String effectFolder (const juce::String& type)
 {
+    if (type == "Notes") return "FILTER / UTILITY";
     if (scrr::dsp::isGenericEffect (type)) return "GENERIC";
     if (type.startsWith ("Harmonic") || type == "SpectralContrast") return "HARMONICS";
     if (type.startsWith ("Frequency") || type == "SpectralMirror" || type == "BinTeleport") return "FREQUENCY";
