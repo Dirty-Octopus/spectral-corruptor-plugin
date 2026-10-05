@@ -1435,6 +1435,96 @@ TEST_CASE ("Macro names edit inline and round-trip without changing automation o
     REQUIRE (p->getMacroName (0) == "Motion");
 }
 
+TEST_CASE ("Modulation parameters accept macros, accumulate offsets, persist and clean up by source identity")
+{
+    using scrr::params::MacroMapping;
+    constexpr int target = MacroMapping::modulationChannel;
+    auto p = testProcessor(); const auto lfo = p->addModulator (false), env = p->addModulator (true), rnd = p->addModulator (false, true);
+    for (const auto& key : { "rate", "phase" }) p->assignMacro (0, target, lfo, key);
+    for (const auto& key : { "gain", "attack", "release" }) p->assignMacro (1, target, env, key);
+    for (const auto& key : { "rate", "seed", "smooth" }) p->assignMacro (2, target, rnd, key);
+    REQUIRE (p->getMacroMappings().size() == 8);
+    p->assignMacro (0, target, lfo, "rate"); p->assignMacro (0, target, lfo, "gain");
+    p->assignMacro (0, target, "missing", "rate"); p->assignModulator (lfo, target, lfo, "rate");
+    REQUIRE (p->getMacroMappings().size() == 8);
+    auto mapping = p->getMacroMappings()[0]; mapping.centre = 2; mapping.setDepth (.1, true); p->updateMacroMapping (mapping);
+    REQUIRE (std::abs (p->getModulators()[0].rate - 2) < .0001);
+    p->assignMacro (3, target, lfo, "rate");
+    auto other = p->getMacroMappings().back(); other.setDepth (-.05, false); p->updateMacroMapping (other);
+    setParam (*p, scrr::params::id::macros[0], 100); setParam (*p, scrr::params::id::macros[3], 100);
+    const double expected = mapping.fromBase (2, .05);
+    REQUIRE (std::abs (p->getEffectiveValue (target, lfo, "rate", -1) - expected) < .0001);
+    const auto preset = p->copyPresetState(); auto restored = testProcessor(); REQUIRE (restored->applyPreset (preset));
+    REQUIRE (restored->getMacroMappings().size() == 9);
+    REQUIRE (restored->getModulators()[0].uid == lfo);
+    REQUIRE (std::abs (restored->getEffectiveValue (target, lfo, "rate", -1) - expected) < .0001);
+    juce::MemoryBlock state; p->getStateInformation (state); restored->setStateInformation (state.getData(), (int) state.getSize());
+    REQUIRE (restored->getMacroMappings().size() == 9);
+    restored->prepareToPlay (48000, 128); juce::AudioBuffer<float> audio (2, 128); audio.clear(); juce::MidiBuffer midi;
+    restored->processBlock (audio, midi); // Source targets must never index the five effect chains.
+    restored->removeMacroMapping (target, lfo, "rate", 3);
+    REQUIRE (restored->getMacroMappings().size() == 8);
+    restored->removeModulator (lfo); REQUIRE (restored->getMacroMappings().size() == 6);
+    for (const auto& m : restored->getMacroMappings()) REQUIRE (m.uid != lfo);
+    auto malformed = preset.createCopy(); malformed.getChildWithName ("modulators").removeChild (0, nullptr);
+    REQUIRE (restored->applyPreset (malformed)); REQUIRE (restored->getMacroMappings().size() == 6);
+}
+
+TEST_CASE ("Macro-controlled source settings produce the same DSP as equivalent source edits")
+{
+    using scrr::params::MacroMapping;
+    for (int type = 0; type < 3; ++type)
+    {
+        const juce::StringArray keys = type == 0 ? juce::StringArray { "rate", "phase" }
+            : type == 1 ? juce::StringArray { "gain", "attack", "release" } : juce::StringArray { "rate", "seed", "smooth" };
+        for (const auto& key : keys)
+        {
+            auto p = testProcessor(); const auto uid = p->addModulator (type == 1, type == 2);
+            p->assignMacro (0, MacroMapping::modulationChannel, uid, juce::Identifier (key));
+            auto mapping = p->getMacroMappings()[0]; mapping.setDepth (key == "release" ? -.03 : .03, true);
+            auto base = p->getModulators()[0]; base.rate = 2; base.gain = -6; base.smooth = 80;
+            auto effective = base; effective.setParameterValue (mapping.parameter, mapping.fromBase (base.parameterValue (mapping.parameter), mapping.offset (.75f)));
+            scrr::dsp::ModulationEngine actual, expected;
+            actual.configure ({ base }, { mapping }); expected.configure ({ effective }); actual.prepare (48000); expected.prepare (48000);
+            scrr::params::MacroValues macros {}; macros[0] = .75f;
+            juce::AudioBuffer<float> audio (2, 128);
+            for (int block = 0; block < 100; ++block)
+            {
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < 128; ++i) audio.setSample (c, i, block < 50 ? .1f : 0);
+                actual.process (audio, 0, 128, {}, 120, false, 0, false, nullptr, macros);
+                expected.process (audio, 0, 128, {}, 120, false, 0, false);
+                REQUIRE (std::abs (actual.value (0) - expected.value (0)) < .000001);
+                REQUIRE (std::abs (actual.phase (0) - expected.phase (0)) < .000001);
+            }
+            actual.configure ({ base }); actual.prepare (48000); expected.configure ({ base }); expected.prepare (48000);
+            actual.process (audio, 0, 128, {}, 120, false, 0, false, nullptr, macros);
+            expected.process (audio, 0, 128, {}, 120, false, 0, false);
+            REQUIRE (std::abs (actual.value (0) - expected.value (0)) < .000001);
+        }
+    }
+}
+
+TEST_CASE ("Modulation card right-click assigns and removes macros using the existing menu and depth strip")
+{
+    auto p = testProcessor(); const auto uid = p->addModulator (false, true);
+    auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor());
+    editor->setSize (1040, 780); editor->addToDesktop (0); editor->setVisible (true);
+    findButton (*editor, "MODULATION")->triggerClick(); pump (100);
+    auto* card = findID (*editor, "modulator-" + uid); REQUIRE (card != nullptr);
+    auto* slider = dynamic_cast<scrr::gui::AssignableSlider*> (findID (*card, "random-smooth")); REQUIRE (slider != nullptr);
+    slider->mouseDown (mouse (*slider, { 20, 12 }, false, juce::ModifierKeys::rightButtonModifier));
+    REQUIRE (waitForUI ([] { return juce::Component::getCurrentlyModalComponent() != nullptr; }));
+    juce::Component::getCurrentlyModalComponent()->exitModalState (1);
+    REQUIRE (waitForUI ([&] { return p->getMacroMappings().size() == 1 && slider->modulationHeight() == 15; }));
+    REQUIRE (p->getMacroMappings()[0].parameter == juce::Identifier ("smooth"));
+    slider->setValue (125, juce::sendNotificationSync); REQUIRE (std::abs (p->getModulators()[0].smooth - 125) < .0001);
+    slider->mouseDown (mouse (*slider, { 20, 20 }, false, juce::ModifierKeys::rightButtonModifier));
+    REQUIRE (waitForUI ([] { return juce::Component::getCurrentlyModalComponent() != nullptr; }));
+    juce::Component::getCurrentlyModalComponent()->exitModalState (1);
+    REQUIRE (waitForUI ([&] { return p->getMacroMappings().empty(); }));
+    juce::PopupMenu::dismissAllActiveMenus();
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
@@ -1579,6 +1669,13 @@ int main (int argc, char** argv)
             const auto pixels = randomCard->createComponentSnapshot (randomCard->getLocalBounds(), true, 2.0f);
             juce::FileOutputStream out (directory.getChildFile ("random-card.png")); out.setPosition (0); out.truncate(); juce::PNGImageFormat().writeImageToStream (pixels, out);
         }
+        for (int i = 0; i < 8; ++i) p.assignMacro (i, scrr::params::MacroMapping::modulationChannel, random.uid, "smooth");
+        p.assignMacro (0, scrr::params::MacroMapping::modulationChannel, random.uid, "rate");
+        pump (120); capture ("modulation-macro");
+        dynamic_cast<juce::Button*> (findID (*editor, "macro-map-1"))->triggerClick(); pump (100); capture ("modulation-macro-mappings");
+        findButton (*findID (*editor, "macro-mappings"), "CLOSE  x")->triggerClick(); pump (60);
+        p.removeMacroMapping (scrr::params::MacroMapping::modulationChannel, random.uid, "smooth");
+        p.removeMacroMapping (scrr::params::MacroMapping::modulationChannel, random.uid, "rate");
         setParam (p, scrr::params::id::channelEnabled[0], 0); pump (100); capture ("channel-muted");
         setParam (p, scrr::params::id::channelEnabled[0], 1); pump (100);
         findButton (*findID (*editor, "modulation-page"), "EFFECTS >")->triggerClick(); pump (100);

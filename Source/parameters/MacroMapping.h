@@ -10,6 +10,7 @@
 namespace scrr::params {
 struct MacroMapping
 {
+    static constexpr int modulationChannel = 5;
     enum Mode { unipolarRight, unipolarLeft, bipolarLeftLow, bipolarRightLow };
     int macro {}, channel {}, mode { unipolarRight };
     juce::String uid, label, unit, sourceUid, sourceName;

@@ -4,6 +4,7 @@
 #pragma once
 #include "FrequencyScale.h"
 #include "Theme.h"
+#include "AssignableSlider.h"
 #include "../PluginProcessor.h"
 #include <deque>
 
@@ -196,18 +197,40 @@ public:
             }
         }
         addAndMakeVisible (shape); addAndMakeVisible (first); addAndMakeVisible (second);
+        configureMapping (first, source.envelope ? "gain" : "rate");
+        configureMapping (second, source.envelope ? "attack" : source.random ? "seed" : "phase");
+        if (source.envelope || source.random) configureMapping (third, source.random ? "smooth" : "release");
     }
     std::function<void(const juce::String&)> removeSource, showMappings;
     const juce::String& uid() const { return source.uid; }
-    void tick (float value, float phase) { curve.tick (value, phase); repaint(); }
+    std::function<void(juce::Component&, const juce::String&, const juce::Identifier&)> mappingMenu;
+    int extraHeight() const { return mappingHeight(); }
+    void tick (float value, float phase, const scrr::params::ModulationSource& current, const std::vector<scrr::params::MacroMapping>& routes,
+               const scrr::params::ModulationValues& values)
+    {
+        // Base edits in the mapping panel must also reach the card's cached source.
+        source = current;
+        const int oldHeight = mappingHeight();
+        for (auto* slider : { &first, &second, &third })
+        {
+            if (slider->getComponentID().isEmpty()) continue;
+            const juce::Identifier parameter (slider->getProperties()["sourceParameter"].toString());
+            std::vector<scrr::params::MacroMapping> assigned;
+            for (const auto& route : routes) if (route.channel == scrr::params::MacroMapping::modulationChannel && route.uid == source.uid && route.parameter == parameter) assigned.push_back (route);
+            slider->setMappings (assigned); slider->refreshModulation (values);
+            if (! slider->isMouseButtonDown()) slider->setValue (source.parameterValue (parameter), juce::dontSendNotification);
+        }
+        if (mappingHeight() != oldHeight) resized();
+        curve.source = source; curve.tick (value, phase); repaint();
+    }
     void resized() override
     {
         auto a = getLocalBounds().reduced (12); auto header = a.removeFromTop (26);
         remove.setBounds (header.removeFromRight (26)); header.removeFromRight (6); enabled.setBounds (header.removeFromRight (66)); title.setBounds (header);
-        a.removeFromTop (8); curve.setBounds (a.removeFromTop (juce::jmax (56, getHeight() - (source.random ? 236 : 192)))); a.removeFromTop (8);
+        a.removeFromTop (8); curve.setBounds (a.removeFromTop (juce::jmax (56, getHeight() - (source.random ? 236 : 192) - mappingHeight()))); a.removeFromTop (8);
         auto choice = a.removeFromTop (26); mappings.setBounds (choice.removeFromRight (70)); choice.removeFromRight (8); shape.setBounds (choice);
-        a.removeFromTop (19); auto row = a.removeFromTop (25); first.setBounds (row.removeFromLeft (row.getWidth() / 2).withTrimmedRight (8)); second.setBounds (row);
-        if (source.envelope || source.random) { a.removeFromTop (19); third.setBounds (a.removeFromTop (25)); }
+        a.removeFromTop (19); auto row = a.removeFromTop (25 + juce::jmax (first.modulationHeight(), second.modulationHeight())); first.setBounds (row.removeFromLeft (row.getWidth() / 2).withTrimmedRight (8)); second.setBounds (row);
+        if (source.envelope || source.random) { a.removeFromTop (19); third.setBounds (a.removeFromTop (25 + third.modulationHeight())); }
         if (! source.envelope)
         {
             first.setVisible (! source.sync); division.setVisible (source.sync); division.setBounds (first.getBounds());
@@ -222,11 +245,21 @@ public:
         if (source.envelope || source.random) label (source.random ? "SMOOTH" : "FALL", third);
     }
 private:
+    int mappingHeight() const { return juce::jmax (first.modulationHeight(), second.modulationHeight()) + third.modulationHeight(); }
+    void configureMapping (AssignableSlider& slider, const char* key)
+    {
+        const juce::Identifier parameter (key);
+        slider.getProperties().set ("sourceParameter", key);
+        if (slider.getComponentID().isEmpty()) slider.setComponentID ("modulation-" + juce::String (key));
+        slider.mappingMenu = [this, &slider, parameter] { if (mappingMenu) mappingMenu (slider, source.uid, parameter); };
+        slider.changeMapping = [this] (auto mapping) { processor.updateMacroMapping (mapping); };
+        slider.unmapRoute = [this] (auto mapping) { processor.removeMacroMapping (mapping.channel, mapping.uid, mapping.parameter, mapping.macro); };
+    }
     void submit() { curve.source = source; processor.updateModulator (source); repaint(); }
     SpectralCrrptProcessor& processor; scrr::params::ModulationSource source;
     juce::Label title; juce::ToggleButton enabled { "ON" }, sync { "SYNC" }, retrigger { "RESTART" };
     juce::TextButton remove { "x" }, mappings { "MAPS" };
-    ModulationCurve curve; juce::ComboBox shape, division; juce::Slider first, second, third;
+    ModulationCurve curve; juce::ComboBox shape, division; AssignableSlider first, second, third;
 };
 class ModulationPage : public juce::Component
 {
@@ -246,13 +279,22 @@ public:
     ~ModulationPage() override { view.setViewedComponent (nullptr, false); }
     std::function<void()> closed;
     std::function<void(const juce::String&)> openMappings;
+    std::function<void(juce::Component&, const juce::String&, const juce::Identifier&)> mappingMenu;
     void open() { refresh(); setVisible (true); toFront (true); }
     void tick()
     {
         if (! isVisible()) return;
         if (revision != processor.getModulatorRevision()) refresh();
         const auto values = processor.getModulationValues();
-        for (size_t i = 0; i < cards.size(); ++i) cards[i]->tick (values[i + 8], processor.getModulatorPhase ((int) i));
+        const auto routes = processor.getMacroMappings();
+        const auto sources = processor.getModulators(); bool layout = false;
+        for (size_t i = 0; i < cards.size() && i < sources.size(); ++i)
+        {
+            const int previous = cards[i]->extraHeight();
+            cards[i]->tick (values[i + 8], processor.getModulatorPhase ((int) i), sources[i], routes, values);
+            layout |= previous != cards[i]->extraHeight();
+        }
+        if (layout) resized();
         repaint();
     }
     void refresh()
@@ -265,6 +307,7 @@ public:
             card->removeSource = [safe] (const juce::String& uid)
             { juce::MessageManager::callAsync ([safe, uid] { if (safe) { safe->processor.removeModulator (uid); safe->refresh(); } }); };
             card->showMappings = [safe] (const juce::String& uid) { if (safe && safe->openMappings) safe->openMappings (uid); };
+            card->mappingMenu = [safe] (auto& target, const auto& uid, const auto& parameter) { if (safe && safe->mappingMenu) safe->mappingMenu (target, uid, parameter); };
             list.addAndMakeVisible (*card); cards.push_back (std::move (card));
         }
         addLFO.setEnabled (cards.size() < (size_t) scrr::params::maxModulators); addEnv.setEnabled (addLFO.isEnabled()); addRandom.setEnabled (addLFO.isEnabled()); resized(); repaint();
@@ -277,8 +320,15 @@ public:
         view.setBounds (14, 88, getWidth() - 28, juce::jmax (10, getHeight() - 102));
         const int width = view.getWidth() - 14, columns = width >= 690 ? 2 : 1, cardWidth = (width - 10 * (columns - 1)) / columns;
         const int cardHeight = juce::jlimit (292, 344, view.getHeight());
-        for (size_t i = 0; i < cards.size(); ++i) cards[i]->setBounds ((int) (i % (size_t) columns) * (cardWidth + 10), (int) (i / (size_t) columns) * (cardHeight + 10), cardWidth, cardHeight);
-        list.setSize (width, juce::jmax (view.getHeight(), ((int) cards.size() + columns - 1) / columns * (cardHeight + 10) - 10));
+        int y = 0;
+        for (size_t i = 0; i < cards.size(); i += (size_t) columns)
+        {
+            int extra = 0;
+            for (size_t j = i; j < cards.size() && j < i + (size_t) columns; ++j) extra = juce::jmax (extra, cards[j]->extraHeight());
+            for (size_t j = i; j < cards.size() && j < i + (size_t) columns; ++j) cards[j]->setBounds ((int) (j - i) * (cardWidth + 10), y, cardWidth, cardHeight + extra);
+            y += cardHeight + extra + 10;
+        }
+        list.setSize (width, juce::jmax (view.getHeight(), y - 10));
     }
     void paint (juce::Graphics& g) override
     {

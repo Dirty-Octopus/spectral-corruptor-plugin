@@ -44,7 +44,7 @@ scrr::params::MacroValues SpectralCrrptProcessor::getMacroValues() const noexcep
 }
 bool SpectralCrrptProcessor::describeMacroTarget (MacroMapping& m) const
 {
-    if (m.channel < 0 || m.channel > 4) return false;
+    if (m.channel < 0 || m.channel > MacroMapping::modulationChannel) return false;
     if (m.sourceUid.isEmpty()) { if (m.macro < 0 || m.macro >= 8) return false; m.sourceName = getMacroLabel (m.macro); }
     else
     {
@@ -52,6 +52,28 @@ bool SpectralCrrptProcessor::describeMacroTarget (MacroMapping& m) const
         for (size_t i = 0; i < modulators.size(); ++i) if (modulators[i].uid == m.sourceUid)
         { m.sourceIndex = 8 + (int) i; m.sourceName = modulators[i].name; m.sourceEnabled = modulators[i].enabled; break; }
         if (m.sourceIndex < 0) return false;
+    }
+    if (m.channel == MacroMapping::modulationChannel)
+    {
+        // Source settings accept macros only, avoiding self-routing and cycles.
+        if (m.sourceUid.isNotEmpty()) return false;
+        for (const auto& source : modulators) if (source.uid == m.uid)
+        {
+            scrr::dsp::ParamSpec spec;
+            const auto& key = m.parameter.toString();
+            using scrr::dsp::makeFloat;
+            if (! source.envelope && key == "rate") spec = makeFloat ("rate", "RATE", .01f, source.random ? 128.0f : 40.0f, 1, .01f, " Hz");
+            else if (! source.envelope && ! source.random && key == "phase") spec = makeFloat ("phase", "PHASE", 0, 360, 0, 1, " deg");
+            else if (source.random && key == "seed") spec = makeFloat ("seed", "SEED", 0, 999999, 1, 1, "");
+            else if (source.random && key == "smooth") spec = makeFloat ("smooth", "SMOOTH", 0, 2000, 0, .1f, " ms");
+            else if (source.envelope && key == "gain") spec = makeFloat ("gain", "GAIN", -24, 48, 0, .1f, " dB");
+            else if (source.envelope && key == "attack") spec = makeFloat ("attack", "RISE", .1f, 2000, 10, .1f, " ms");
+            else if (source.envelope && key == "release") spec = makeFloat ("release", "FALL", 1, 5000, 150, .1f, " ms");
+            else return false;
+            m.minimum = spec.minVal; m.maximum = spec.maxVal; m.step = spec.step; m.logarithmic = false;
+            m.label = "MODULATION / " + source.name + " / " + spec.label; m.unit = spec.unit; return true;
+        }
+        return false;
     }
     if (m.channel == 0)
     {
@@ -87,6 +109,11 @@ bool SpectralCrrptProcessor::describeMacroTarget (MacroMapping& m) const
 }
 double SpectralCrrptProcessor::macroBase (const MacroMapping& m) const
 {
+    if (m.channel == MacroMapping::modulationChannel)
+    {
+        for (const auto& source : modulators) if (source.uid == m.uid) return source.parameterValue (m.parameter);
+        return m.centre;
+    }
     if (m.channel == 0) return apvts.getRawParameterValue (m.parameter.toString())->load();
     for (auto child : rackState.getChildWithName ("ch" + juce::String (m.channel)))
         if (child["uid"].toString() == m.uid) return juce::jlimit (m.minimum, m.maximum, (double) child[m.parameter]);
@@ -136,7 +163,11 @@ void SpectralCrrptProcessor::updateMacroMapping (MacroMapping next)
         // Centre changes in the mapping list are ordinary base parameter edits.
         if (std::abs (macroBase (next) - next.centre) > juce::jmax (1.0e-6, next.step * .001))
         {
-            if (next.channel == 0)
+            if (next.channel == MacroMapping::modulationChannel)
+            {
+                for (auto& source : modulators) if (source.uid == next.uid) source.setParameterValue (next.parameter, next.centre);
+            }
+            else if (next.channel == 0)
             {
                 auto* p = apvts.getParameter (next.parameter.toString());
                 p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 ((float) next.centre)); p->endChangeGesture();
@@ -158,7 +189,7 @@ void SpectralCrrptProcessor::restoreMacroMappings (const juce::ValueTree& tree, 
         m.uid = child["uid"].toString(); const auto parameter = child["parameter"].toString();
         if (parameter.isEmpty() || parameter.length() > 128) continue;
         m.parameter = juce::Identifier (parameter);
-        if (m.channel > 0)
+        if (m.channel > 0 && m.channel != MacroMapping::modulationChannel)
         {
             const auto found = ids.find (juce::String (m.channel) + ":" + m.uid);
             if (found == ids.end()) continue;
@@ -183,7 +214,11 @@ void SpectralCrrptProcessor::restoreMacroMappings (const juce::ValueTree& tree, 
             if (! m.bipolar()) m.centre = m.low;
             m.startOffset = m.normalise (m.low) - m.normalise (m.centre);
             m.endOffset = m.normalise (m.high) - m.normalise (m.centre);
-            if (m.channel == 0)
+            if (m.channel == MacroMapping::modulationChannel)
+            {
+                for (auto& source : modulators) if (source.uid == m.uid) source.setParameterValue (m.parameter, m.centre);
+            }
+            else if (m.channel == 0)
             {
                 auto* p = apvts.getParameter (m.parameter.toString());
                 p->setValueNotifyingHost (p->convertTo0to1 ((float) m.centre));
@@ -223,7 +258,7 @@ void SpectralCrrptProcessor::removeModulator (const juce::String& uid)
 {
     const juce::ScopedLock lock (stateLock);
     modulators.erase (std::remove_if (modulators.begin(), modulators.end(), [&] (const auto& m) { return m.uid == uid; }), modulators.end());
-    macroMappings.erase (std::remove_if (macroMappings.begin(), macroMappings.end(), [&] (const auto& m) { return m.sourceUid == uid; }), macroMappings.end());
+    macroMappings.erase (std::remove_if (macroMappings.begin(), macroMappings.end(), [&] (const auto& m) { return m.sourceUid == uid || (m.channel == MacroMapping::modulationChannel && m.uid == uid); }), macroMappings.end());
     for (auto& m : macroMappings) describeMacroTarget (m);
     modulatorRevision.fetch_add (1); presetDirty.store (true); publishRack (true);
 }

@@ -222,6 +222,7 @@ void SpectralProcessor::setMacroMappings (const std::vector<scrr::params::MacroM
     for (auto& chain : chains) for (auto& slot : chain) slot.mappings.clear();
     for (const auto& m : mappings)
     {
+        if (m.channel == scrr::params::MacroMapping::modulationChannel) continue;
         if (m.channel == 0) { globalMappings.push_back (m); continue; }
         for (auto& slot : chains[(size_t) m.channel])
             if (slot.state["uid"].toString() == m.uid) { slot.mappings.push_back (m); break; }

@@ -126,6 +126,8 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
         modulationButton.setToggleState (modulationPage.isVisible(), juce::dontSendNotification);
     };
     modulationPage.closed = [this] { modulationButton.setToggleState (false, juce::dontSendNotification); };
+    modulationPage.mappingMenu = [this] (auto& target, const auto& uid, const auto& parameter)
+    { macroMenu (target, scrr::params::MacroMapping::modulationChannel, uid, parameter); };
     modulationPage.openMappings = [this] (const juce::String& uid) { macroPanel.showSource (uid); };
     addAndMakeVisible (modulationButton); addChildComponent (modulationPage);
     setWantsKeyboardFocus (true);
@@ -283,11 +285,12 @@ void EditorContent::refreshMacroControls()
 }
 void EditorContent::macroMenu (juce::Component& target, int targetChannel, const juce::String& uid, const juce::Identifier& parameter)
 {
+    displayedMappings = processor.getMacroMappings();
     int assigned = -1; std::array<bool, 8> assignedMacros {};
     for (const auto& m : displayedMappings) if (m.sourceUid.isEmpty() && m.channel == targetChannel && m.uid == uid && m.parameter == parameter) { assigned = m.macro; assignedMacros[(size_t) m.macro] = true; }
     juce::PopupMenu menu; menu.setLookAndFeel (&look); menu.addSectionHeader ("SEND TO MACRO");
     for (int i = 0; i < 8; ++i) menu.addItem (i + 1, processor.getMacroLabel (i), true, assignedMacros[(size_t) i]);
-    const auto sources = processor.getModulators();
+    const auto sources = targetChannel == scrr::params::MacroMapping::modulationChannel ? std::vector<scrr::params::ModulationSource> {} : processor.getModulators();
     std::vector<bool> sourceAssigned (sources.size(), false);
     juce::PopupMenu lfos, envelopes, randoms;
     for (size_t i = 0; i < sources.size(); ++i)

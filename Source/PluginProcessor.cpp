@@ -97,7 +97,7 @@ void SpectralCrrptProcessor::consumeRack()
     for (int i = 0; i < 5; ++i)
         spectralProcessor.updateModuleChain (i, next->chains[(size_t) i]);
     spectralProcessor.setMacroMappings (next->mappings);
-    modulationEngine.configure (next->sources);
+    modulationEngine.configure (next->sources, next->mappings);
     appliedRack = std::move (next);
 }
 
@@ -487,7 +487,7 @@ void SpectralCrrptProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     {
         const int count = juce::jmin (quantum, buffer.getNumSamples() - offset);
         modulationEngine.process (mainInput, offset, count, spectralProcessor.getPreBandLevels(), bpm, playing,
-                                  ppq + (double) offset * bpm / (60 * getSampleRate()), timeline, &sidechain);
+                                  ppq + (double) offset * bpm / (60 * getSampleRate()), timeline, &sidechain, getMacroValues());
         spectralProcessor.applyMacroValues (getModulationValues());
         spectralProcessor.updateGlobalParameters (apvts);
         float* channels[2] {};

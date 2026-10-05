@@ -22,6 +22,29 @@ struct ModulationSource
     std::vector<CurvePoint> points { { 0, 0 }, { .5f, 1 }, { 1, 0 } };
     inline static constexpr std::array<double, 12> beats { 32, 16, 8, 4, 2, 1, .5, .25, .125, .0625, 1.0 / 3, 1.0 / 6 };
     static juce::StringArray divisionNames() { return { "8 bars", "4 bars", "2 bars", "1 bar", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64", "1/8 T", "1/16 T" }; }
+    double parameterValue (const juce::Identifier& parameter) const noexcept
+    {
+        const auto& key = parameter.toString();
+        if (key == "rate") return rate;
+        if (key == "phase") return phase;
+        if (key == "seed") return seed;
+        if (key == "smooth") return smooth;
+        if (key == "gain") return gain;
+        if (key == "attack") return attack;
+        if (key == "release") return release;
+        return 0;
+    }
+    void setParameterValue (const juce::Identifier& parameter, double value) noexcept
+    {
+        const auto& key = parameter.toString();
+        if (key == "rate") rate = (float) value;
+        else if (key == "phase") phase = (float) value;
+        else if (key == "seed") seed = (int) value;
+        else if (key == "smooth") smooth = (float) value;
+        else if (key == "gain") gain = (float) value;
+        else if (key == "attack") attack = (float) value;
+        else if (key == "release") release = (float) value;
+    }
     float valueAt (double position) const noexcept
     {
         if (! std::isfinite (position)) return 0;
