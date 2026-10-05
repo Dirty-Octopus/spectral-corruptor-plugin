@@ -23,8 +23,8 @@ All plugin DSP, modules, GUI, macros, modulation, state/preset management and bu
 ## Build
 
 ```sh
-git clone --recurse-submodules https://github.com/Dirty-Octopus/spectral-corrupter-plugin.git
-cd spectral-corrupter-plugin
+git clone --recurse-submodules https://github.com/Dirty-Octopus/spectral-corruptor-plugin.git
+cd spectral-corruptor-plugin
 cmake --preset mac-release -DSCR_COPY_PLUGIN=OFF
 cmake --build Builds/mac-release --parallel 4
 ctest --test-dir Builds/mac-release --output-on-failure

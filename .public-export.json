@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_commit": "4faef837ee94f883da11ed9b618821e137a14062",
+  "source_commit": "75687ac714265e1a81e3a7de83a5f525e51d3944",
   "working_tree_preview": false,
   "juce_commit": "51d11a2be6d5c97ccf12b4e5e827006e19f0555a",
   "files": {
@@ -11,7 +11,7 @@
     "CMakeLists.txt": "6bc942fc9aa31e31f5113f92d567b7aeadb92fac32b19920cd03f33fd157ecb2",
     "CMakePresets.json": "d0563de43ae187fa7fef08976b055cc3086f6cf7ebbfba34ebeb91fbde58bda1",
     "LICENSE": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
-    "README.md": "4481047ad8071545bbbf05cff4b227043aedf6462af9c88413e6672ed14933a6",
+    "README.md": "5a79a6790fe28776a8cba60e6be82a4cf2eea9b59577915284f7f5683e163eb7",
     "Source/MacroRouting.cpp": "4da0604c38e612d594555aad640e85c0fc4e5803b4ecb5a69e8de1813301a554",
     "Source/PluginEditor.cpp": "21fcb06b084a9704977d18a269a8fcbcd026e81b06167f1156e3c784c488b4b3",
     "Source/PluginEditor.h": "306b9041473262867711fb9babfe82006e0fffb2219be55c0d63badf67a32457",
