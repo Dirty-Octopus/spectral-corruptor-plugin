@@ -56,6 +56,7 @@ private:
     void macroMenu (juce::Component&, int channel, const juce::String& uid, const juce::Identifier& parameter);
     SpectralCrrptProcessor& processor;
     InstrumentLookAndFeel look;
+    MacroKnobLook gainLook;
     juce::TooltipWindow tooltip { this, 550 };
     PresetBar presets;
     LicensePanel licensePanel;

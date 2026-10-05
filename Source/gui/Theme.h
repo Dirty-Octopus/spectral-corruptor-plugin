@@ -102,7 +102,14 @@ public:
         if (height > 0)
         {
             layout.sliderBounds = layout.sliderBounds.withTrimmedTop (height);
-            layout.textBoxBounds.setY (height + (slider.getHeight() - height - layout.textBoxBounds.getHeight()) / 2);
+            if (slider.getTextBoxPosition() == juce::Slider::TextBoxAbove)
+            {
+                layout.textBoxBounds.translate (0, height);
+            }
+            else if (slider.getTextBoxPosition() != juce::Slider::TextBoxBelow)
+            {
+                layout.textBoxBounds.setY (height + (slider.getHeight() - height - layout.textBoxBounds.getHeight()) / 2);
+            }
         }
         return layout;
     }

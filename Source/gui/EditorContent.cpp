@@ -29,6 +29,14 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     setupSlider (dryWet, 0, 100, .1, 100); dryWet.setTextValueSuffix (" %");
     setupSlider (inputGain, -48, 12, .1, 0); inputGain.setTextValueSuffix (" dB");
     setupSlider (outputGain, -48, 12, .1, 0); outputGain.setTextValueSuffix (" dB");
+    for (auto* gain : { &inputGain, &outputGain })
+    {
+        gain->setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        gain->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 78, 22);
+        gain->setLookAndFeel (&gainLook);
+        gain->setColour (juce::Slider::rotarySliderFillColourId, Theme::black());
+    }
+    inputGain.setComponentID ("input-gain"); outputGain.setComponentID ("output-gain");
     setupSlider (splitCount, 1, 64, 1, 1); setupSlider (crossfade, 0, 100, .1, 0); crossfade.setTextValueSuffix (" %");
     for (auto* s : { &dryWet, &inputGain, &outputGain, &splitCount, &crossfade })
     {
@@ -139,6 +147,7 @@ EditorContent::~EditorContent()
 {
     stopTimer(); juce::PopupMenu::dismissAllActiveMenus();
     rackViewport.setViewedComponent (nullptr, false); inspectorViewport.setViewedComponent (nullptr, false); masterViewport.setViewedComponent (nullptr, false);
+    inputGain.setLookAndFeel (nullptr); outputGain.setLookAndFeel (nullptr);
     setLookAndFeel (nullptr);
 }
 void EditorContent::timerCallback()
@@ -644,13 +653,10 @@ void EditorContent::resized()
     int my = 18;
     auto place = [&] (AssignableSlider& slider) { const int height = 27 + slider.modulationHeight(); slider.setBounds (2, my, mw - 4, height); my += height + 21; };
     place (dryWet);
-    const bool compactGains = inputGain.modulationHeight() == 0 && outputGain.modulationHeight() == 0;
-    for (auto* gain : { &inputGain, &outputGain }) gain->setTextBoxStyle (juce::Slider::TextBoxRight, false, compactGains ? 54 : 78, 26);
-    if (compactGains)
-    {
-        inputGain.setBounds (2, my, mw / 2 - 6, 27); outputGain.setBounds (mw / 2 + 4, my, mw / 2 - 6, 27); my += 48;
-    }
-    else { place (inputGain); place (outputGain); }
+    const int gainModulationHeight = juce::jmax (inputGain.modulationHeight(), outputGain.modulationHeight());
+    inputGain.setBounds (2, my, mw / 2 - 6, 72 + inputGain.modulationHeight());
+    outputGain.setBounds (mw / 2 + 4, my, mw / 2 - 6, 72 + outputGain.modulationHeight());
+    my += 93 + gainModulationHeight;
     const int fftWidth = mw * 3 / 5;
     fftSize.setBounds (2, my, fftWidth - 6, 28); oversample.setBounds (fftWidth + 4, my, mw - fftWidth - 6, 28); my += 34;
     window.setBounds (2, my, mw - 4, 26); my += 47;

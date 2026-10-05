@@ -16,7 +16,12 @@ void SpectrogramDisplay::resized()
     plot = getLocalBounds().withTrimmedTop (30).withTrimmedBottom (24).reduced (10, 0);
     const int w = juce::jlimit (64, 640, plot.getWidth()), h = juce::jlimit (32, 180, plot.getHeight());
     if (history.getWidth() != w || history.getHeight() != h)
-        history = history.isNull() ? juce::Image (juce::Image::ARGB, w, h, true) : history.rescaled (w, h);
+    {
+        // History is rewritten from the CPU every tick. Keep it in software
+        // storage so native rendering cannot retain the mutable pixel buffer
+        // (CoreGraphics) or depend on a GPU bitmap surviving device loss.
+        history = history.isNull() ? juce::Image (juce::Image::ARGB, w, h, true, juce::SoftwareImageType()) : history.rescaled (w, h);
+    }
 }
 void SpectrogramDisplay::timerCallback()
 {
@@ -24,22 +29,24 @@ void SpectrogramDisplay::timerCallback()
     updateChannelBands();
     if (paused) return;
     if (! processor.getProcessor().copyLastMagnitudes (magnitudes, &spectrumRate, input) || magnitudes.size() < 2 || history.isNull()) return;
-    juce::Image::BitmapData bitmap (history, juce::Image::BitmapData::readWrite);
     const int w = history.getWidth(), h = history.getHeight();
-    for (int y = 0; y < h - 1; ++y)
-        std::memcpy (bitmap.getLinePointer (y), bitmap.getLinePointer (y + 1), (size_t) bitmap.lineStride);
-    const float normalise = 4.0f / (float) (2 * (magnitudes.size() - 1));
-    for (int x = 0; x < w; ++x)
     {
-        const float frequency = SpectrumScale::frequency ((float) x / (float) (w - 1));
-        const int bin = SpectrumScale::bin (frequency, (int) magnitudes.size(), spectrumRate);
-        const float db = juce::Decibels::gainToDecibels (magnitudes[(size_t) bin] * normalise, -96.0f);
-        const float t = juce::jlimit (0.0f, 1.0f, (db + 90.0f) / 84.0f);
-        auto colour = t < .45f ? Theme::field().interpolatedWith (Theme::blue(), t / .45f)
-                     : t < .8f ? Theme::blue().interpolatedWith (Theme::yellow(), (t - .45f) / .35f)
-                     : Theme::yellow().interpolatedWith (Theme::red(), (t - .8f) / .2f);
-        bitmap.setPixelColour (x, h - 1, colour.withAlpha (juce::jlimit (0.0f, 1.0f, t * 2.0f)));
-    }
+        juce::Image::BitmapData bitmap (history, juce::Image::BitmapData::readWrite);
+        for (int y = 0; y < h - 1; ++y)
+            std::memcpy (bitmap.getLinePointer (y), bitmap.getLinePointer (y + 1), (size_t) bitmap.lineStride);
+        const float normalise = 4.0f / (float) (2 * (magnitudes.size() - 1));
+        for (int x = 0; x < w; ++x)
+        {
+            const float frequency = SpectrumScale::frequency ((float) x / (float) (w - 1));
+            const int bin = SpectrumScale::bin (frequency, (int) magnitudes.size(), spectrumRate);
+            const float db = juce::Decibels::gainToDecibels (magnitudes[(size_t) bin] * normalise, -96.0f);
+            const float t = juce::jlimit (0.0f, 1.0f, (db + 90.0f) / 84.0f);
+            auto colour = t < .45f ? Theme::field().interpolatedWith (Theme::blue(), t / .45f)
+                         : t < .8f ? Theme::blue().interpolatedWith (Theme::yellow(), (t - .45f) / .35f)
+                         : Theme::yellow().interpolatedWith (Theme::red(), (t - .8f) / .2f);
+            bitmap.setPixelColour (x, h - 1, colour.withAlpha (juce::jlimit (0.0f, 1.0f, t * 2.0f)));
+        }
+    } // Finish pixel writes before scheduling a paint or uploading a native image.
     repaint();
 }
 void SpectrogramDisplay::mouseDown (const juce::MouseEvent&) { paused = ! paused; repaint(); }

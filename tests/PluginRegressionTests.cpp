@@ -517,6 +517,72 @@ TEST_CASE ("Engine runs every FFT size and oversampling choice with oversized ho
     }
 }
 
+TEST_CASE ("Input and output spectrum history keeps updating through resize, visibility and FFT changes")
+{
+    if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr) return;
+    auto p = testProcessor(); p->prepareToPlay (48000, 512);
+    scrr::gui::SpectrogramDisplay input (*p, true), output (*p, false);
+    juce::Component window; window.addAndMakeVisible (input); window.addAndMakeVisible (output);
+    window.setBounds (40, 40, 640, 450); input.setBounds (0, 0, 640, 220); output.setBounds (0, 225, 640, 220);
+    window.addToDesktop (0); window.setVisible (true);
+    juce::AudioBuffer<float> audio (2, 512); juce::MidiBuffer midi;
+    auto latestRow = [] (scrr::gui::SpectrogramDisplay& display)
+    {
+        const auto image = display.createComponentSnapshot (display.getLocalBounds());
+        const juce::Image::BitmapData pixels (image, juce::Image::BitmapData::readOnly);
+        int coloured = 0;
+        const int y = display.getHeight() - 25;
+        for (int x = 12; x < display.getWidth() - 12; ++x)
+        {
+            const auto c = pixels.getPixelColour (x, y);
+            if (c.getBlue() > 100 && c.getRed() < 70) ++coloured;
+            else if (c.getRed() > 150 && c.getGreen() > 100 && c.getBlue() < 80) ++coloured;
+        }
+        return coloured;
+    };
+    const int frames = juce::jlimit (64, 6000, juce::SystemStats::getEnvironmentVariable ("SCR_SPECTRUM_STRESS_FRAMES", "64").getIntValue());
+    for (int frame = 0; frame < frames; ++frame)
+    {
+        if (frame == 16) { window.setVisible (false); pump (60); window.setVisible (true); }
+        if (frame == 24) { input.setSize (500, 205); output.setSize (500, 205); }
+        if (frame == 32) { input.setSize (640, 220); output.setSize (640, 220); }
+        if (frame == 40) { setParam (*p, scrr::params::id::fftSizeExtended, 4); setParam (*p, scrr::params::id::oversample, 1); }
+        const bool signal = frame % 8 < 4;
+        for (int block = 0; block < 5; ++block)
+        {
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < 512; ++i)
+                audio.setSample (c, i, signal ? .2f * std::sin ((float) ((frame * 5 + block) * 512 + i) * juce::MathConstants<float>::twoPi * 1500 / 48000) : 0);
+            p->processBlock (audio, midi);
+        }
+        pump (50);
+        if (frame % 8 == 3) REQUIRE (waitForUI ([&] { return latestRow (input) > 0 && latestRow (output) > 0; }));
+        if (frame % 8 == 7) REQUIRE (waitForUI ([&] { return latestRow (input) == 0 && latestRow (output) == 0; }));
+    }
+    window.removeFromDesktop();
+}
+
+TEST_CASE ("Master gain knobs retain host values, editable bases and readable modulation rows")
+{
+    if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr) return;
+    auto p = testProcessor(); auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor());
+    editor->setSize (1040, 780); editor->addToDesktop (0); editor->setVisible (true); pump (60);
+    const juce::String ids[] { scrr::params::id::inputGain, scrr::params::id::outputGain };
+    const juce::String components[] { "input-gain", "output-gain" };
+    for (int index = 0; index < 2; ++index)
+    {
+        auto* knob = dynamic_cast<scrr::gui::AssignableSlider*> (findID (*editor, components[index])); REQUIRE (knob != nullptr);
+        setParam (*p, ids[index], -9); REQUIRE (waitForUI ([&] { return std::abs (knob->getValue() + 9) < .01; }));
+        knob->setValue (-6, juce::sendNotificationSync); REQUIRE (std::abs (p->getAPVTS().getRawParameterValue (ids[index])->load() + 6) < .01f);
+        p->assignMacro (index, 0, {}, juce::Identifier (ids[index]));
+        REQUIRE (waitForUI ([&] { return knob->modulationHeight() > 0; }));
+        knob->setValue (-3, juce::sendNotificationSync); REQUIRE (std::abs (p->getMacroMappings().back().centre + 3) < .01);
+        const auto layout = knob->getLookAndFeel().getSliderLayout (*knob);
+        REQUIRE (layout.sliderBounds.getY() >= knob->modulationHeight());
+        REQUIRE (layout.sliderBounds.getHeight() >= 40);
+        REQUIRE (layout.textBoxBounds.getY() >= layout.sliderBounds.getBottom());
+    }
+}
+
 TEST_CASE ("Stage range and wet mix preserve unselected tones through the complete processor")
 {
     auto render = [] (float stageMix, const juce::String& type = "FrequencyShift")
@@ -1064,7 +1130,8 @@ TEST_CASE ("Native modulation page adds sources, edits curves, toggles channels 
     auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor()); editor->addToDesktop (0); editor->setVisible (true); pump (320);
     auto* fftChoice = dynamic_cast<juce::ComboBox*> (findID (*editor, "fft-size")); REQUIRE (fftChoice);
     REQUIRE (fftChoice->getSelectedId() == 1); REQUIRE (fftChoice->getText() == "2048 / L");
-    setParam (*p, scrr::params::id::fftSize, 2); pump (100);
+    setParam (*p, scrr::params::id::fftSize, 2);
+    REQUIRE (waitForUI ([&] { return fftChoice->getText() == "4096 / L"; }));
     REQUIRE (fftChoice->getSelectedId() == 1); REQUIRE (fftChoice->getText() == "4096 / L");
     findButton (*editor, "MODULATION")->triggerClick(); pump();
     auto* page = findID (*editor, "modulation-page"); REQUIRE (page && page->isVisible());
