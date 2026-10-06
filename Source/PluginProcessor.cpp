@@ -98,6 +98,48 @@ void SpectralCrrptProcessor::publishRack (bool structural)
     if (structural) structureRevision.fetch_add (1);
 }
 
+void SpectralCrrptProcessor::recordUndoState()
+{
+    if (applyingUndoState) return;
+    auto state = copyPresetState();
+    if (undoHistory.empty())
+    {
+        undoHistory.push_back (state);
+        undoPosition = 0;
+    }
+    else if (undoHistory[undoPosition] != state)
+    {
+        undoHistory.resize (undoPosition + 1);
+        undoHistory.push_back (state);
+        if (undoHistory.size() > 101) undoHistory.erase (undoHistory.begin());
+        undoPosition = undoHistory.size() - 1;
+    }
+}
+
+bool SpectralCrrptProcessor::undo()
+{
+    const juce::ScopedLock lock (stateLock);
+    recordUndoState();
+    if (undoPosition == 0) return false;
+    --undoPosition;
+    applyingUndoState = true;
+    const bool restored = applyPreset (undoHistory[undoPosition]);
+    applyingUndoState = false;
+    return restored;
+}
+
+bool SpectralCrrptProcessor::redo()
+{
+    const juce::ScopedLock lock (stateLock);
+    recordUndoState();
+    if (undoPosition + 1 >= undoHistory.size()) return false;
+    ++undoPosition;
+    applyingUndoState = true;
+    const bool restored = applyPreset (undoHistory[undoPosition]);
+    applyingUndoState = false;
+    return restored;
+}
+
 void SpectralCrrptProcessor::consumeRack()
 {
     auto next = std::atomic_load (&publishedRack);
@@ -121,6 +163,7 @@ void SpectralCrrptProcessor::addModule (int channel, const juce::String& type)
     auto chain = rackState.getChildWithName (chainNames[juce::jlimit (0, 4, channel)]);
     auto module = cleanModule (scrr::dsp::createDefaultModuleState (type));
     if (! module.isValid() || chain.getNumChildren() >= maxModulesPerChain) return;
+    recordUndoState();
     module.setProperty ("enabled", true, nullptr);
     chain.addChild (module, stageInsertion (chain, module, -1), nullptr);
     presetDirty.store (true);
@@ -132,6 +175,7 @@ void SpectralCrrptProcessor::removeModule (int channel, int index)
     const juce::ScopedLock lock (stateLock);
     auto chain = rackState.getChildWithName (chainNames[juce::jlimit (0, 4, channel)]);
     if (index < 0 || index >= chain.getNumChildren()) return;
+    recordUndoState();
     const auto removedUid = chain.getChild (index)["uid"].toString();
     macroMappings.erase (std::remove_if (macroMappings.begin(), macroMappings.end(), [&] (const auto& m)
         { return m.channel == channel && m.uid == removedUid; }), macroMappings.end());
@@ -154,6 +198,7 @@ juce::String SpectralCrrptProcessor::transferModule (int source, const juce::Str
     auto from = rackState.getChildWithName (chainNames[source]), to = rackState.getChildWithName (chainNames[destination]);
     const auto original = from.getChildWithProperty ("uid", uid);
     if (! original.isValid() || ((source != destination || duplicate) && to.getNumChildren() >= maxModulesPerChain)) return {};
+    recordUndoState();
     std::vector<scrr::params::MacroMapping> copied;
     if (duplicate)
     {
@@ -203,6 +248,7 @@ juce::String SpectralCrrptProcessor::pasteModule (int channel, const juce::Strin
     auto module = cleanModule (copy.getChildWithName ("module"));
     auto chain = rackState.getChildWithName (chainNames[channel]);
     if (! module.isValid() || chain.getNumChildren() >= maxModulesPerChain) return {};
+    recordUndoState();
     const auto uid = module["uid"].toString();
     for (auto tree : copy.getChildWithName ("modulators"))
     {
@@ -243,6 +289,8 @@ void SpectralCrrptProcessor::setModuleParameter (int channel, const juce::String
             candidate.setProperty (key, value, nullptr);
             auto clean = cleanModule (candidate);
             if (! clean.hasProperty (key)) return;
+            if (module[key] == clean[key]) return;
+            recordUndoState();
             module.setProperty (key, clean[key], nullptr);
             presetDirty.store (true);
             if (module["type"].toString() != "Notes" || key != juce::Identifier ("notes")) publishRack (false);
@@ -283,6 +331,7 @@ bool SpectralCrrptProcessor::applyPreset (const juce::ValueTree& preset)
     if (! preset.isValid() || (! preset.hasType ("PARAMS") && ! preset.getChildWithName ("modules").isValid()))
         return false;
     const juce::ScopedLock lock (stateLock);
+    recordUndoState();
     auto nextRack = juce::ValueTree ("RACK");
     std::map<juce::String, juce::String> restoredIds;
     for (const auto& name : chainNames)

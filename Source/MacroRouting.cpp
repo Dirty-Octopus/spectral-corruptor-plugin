@@ -34,6 +34,7 @@ void SpectralCrrptProcessor::setMacroName (int index, const juce::String& name)
     auto clean = name.replaceCharacters ("\r\n\t", "   ").trim().substring (0, 32);
     if (clean == "M" + juce::String (index + 1)) clean.clear();
     if (macroNames[(size_t) index] == clean) return;
+    recordUndoState();
     macroNames[(size_t) index] = clean; macroNameRevision.fetch_add (1); presetDirty.store (true);
 }
 scrr::params::MacroValues SpectralCrrptProcessor::getMacroValues() const noexcept
@@ -143,12 +144,14 @@ void SpectralCrrptProcessor::assignMacro (int macro, int channel, const juce::St
     MacroMapping next; next.macro = macro; next.channel = channel; next.uid = uid; next.parameter = parameter;
     if (! describeMacroTarget (next) || macroMappings.size() >= 256) return;
     for (const auto& m : macroMappings) if (m.sameTarget (next) && m.sourceUid.isEmpty() && m.macro == macro) return;
+    recordUndoState();
     next.centre = macroBase (next); next.setDepth (next.normalise (next.centre) > .8 ? -.2 : .2, false);
     macroMappings.push_back (next); presetDirty.store (true); publishRack (true);
 }
 void SpectralCrrptProcessor::removeMacroMapping (int channel, const juce::String& uid, const juce::Identifier& parameter, int macro, const juce::String& source)
 {
     const juce::ScopedLock lock (stateLock);
+    recordUndoState();
     macroMappings.erase (std::remove_if (macroMappings.begin(), macroMappings.end(), [&] (const auto& m)
         { return m.channel == channel && m.uid == uid && m.parameter == parameter && (source.isNotEmpty() ? m.sourceUid == source : macro < 0 || (m.sourceUid.isEmpty() && m.macro == macro)); }), macroMappings.end());
     presetDirty.store (true); publishRack (true);
@@ -160,6 +163,9 @@ void SpectralCrrptProcessor::updateMacroMapping (MacroMapping next)
     boundRange (next);
     for (auto& m : macroMappings) if (m.sameTarget (next) && m.sameSource (next))
     {
+        if (std::abs (macroBase (next) - next.centre) > juce::jmax (1.0e-6, next.step * .001)
+            || m.startOffset != next.startOffset || m.endOffset != next.endOffset || m.mode != next.mode)
+            recordUndoState();
         // Centre changes in the mapping list are ordinary base parameter edits.
         if (std::abs (macroBase (next) - next.centre) > juce::jmax (1.0e-6, next.step * .001))
         {
@@ -244,6 +250,7 @@ juce::String SpectralCrrptProcessor::addModulator (bool envelope, bool random)
 {
     const juce::ScopedLock lock (stateLock);
     if (modulators.size() >= (size_t) scrr::params::maxModulators) return {};
+    recordUndoState();
     scrr::params::ModulationSource source; source.uid = juce::Uuid().toString(); source.envelope = envelope;
     source.random = random && ! envelope;
     if (source.random) source.seed = juce::Random::getSystemRandom().nextInt (1000000);
@@ -257,6 +264,7 @@ juce::String SpectralCrrptProcessor::addModulator (bool envelope, bool random)
 void SpectralCrrptProcessor::removeModulator (const juce::String& uid)
 {
     const juce::ScopedLock lock (stateLock);
+    if (std::any_of (modulators.begin(), modulators.end(), [&] (const auto& m) { return m.uid == uid; })) recordUndoState();
     modulators.erase (std::remove_if (modulators.begin(), modulators.end(), [&] (const auto& m) { return m.uid == uid; }), modulators.end());
     macroMappings.erase (std::remove_if (macroMappings.begin(), macroMappings.end(), [&] (const auto& m) { return m.sourceUid == uid || (m.channel == MacroMapping::modulationChannel && m.uid == uid); }), macroMappings.end());
     for (auto& m : macroMappings) describeMacroTarget (m);
@@ -266,7 +274,7 @@ void SpectralCrrptProcessor::updateModulator (scrr::params::ModulationSource sou
 {
     const juce::ScopedLock lock (stateLock);
     for (auto& m : modulators) if (m.uid == source.uid)
-    { m = scrr::params::ModulationSource::read (source.state()); presetDirty.store (true); publishRack (false); return; }
+    { if (m.state().toXmlString() != source.state().toXmlString()) recordUndoState(); m = scrr::params::ModulationSource::read (source.state()); presetDirty.store (true); publishRack (false); return; }
 }
 void SpectralCrrptProcessor::assignModulator (const juce::String& source, int channel, const juce::String& uid, const juce::Identifier& parameter)
 {
@@ -274,6 +282,7 @@ void SpectralCrrptProcessor::assignModulator (const juce::String& source, int ch
     scrr::params::MacroMapping next; next.sourceUid = source; next.channel = channel; next.uid = uid; next.parameter = parameter;
     if (! describeMacroTarget (next) || macroMappings.size() >= 256) return;
     for (const auto& m : macroMappings) if (m.sameTarget (next) && m.sameSource (next)) return;
+    recordUndoState();
     next.centre = macroBase (next); next.setDepth (next.normalise (next.centre) > .8 ? -.2 : .2, false);
     macroMappings.push_back (next); presetDirty.store (true); publishRack (true);
 }

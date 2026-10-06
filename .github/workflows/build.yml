@@ -25,6 +25,23 @@ jobs:
       - name: Test
         run: ctest --test-dir Builds/mac-release --output-on-failure
 
+      - name: Package official macOS binaries
+        if: github.repository == 'Dirty-Octopus/spectral-corruptor'
+        run: |
+          mkdir -p Builds/release-stage Builds/release-packages
+          cp -R Builds/mac-release/SpectralCrrpt_artefacts/Release/VST3/*.vst3 Builds/release-stage/
+          cp -R Builds/mac-release/SpectralCrrpt_artefacts/Release/AU/*.component Builds/release-stage/
+          cp -R Builds/mac-release/SpectralCrrpt_artefacts/Release/Standalone/*.app Builds/release-stage/
+          ditto -c -k --norsrc Builds/release-stage Builds/release-packages/SpectralCorruptor-macOS.zip
+
+      - name: Upload official macOS package
+        if: github.repository == 'Dirty-Octopus/spectral-corruptor'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OfficialReleaseMac
+          path: Builds/release-packages/SpectralCorruptor-macOS.zip
+          if-no-files-found: error
+
       - name: Upload VST3
         uses: actions/upload-artifact@v4
         with:
@@ -70,3 +87,35 @@ jobs:
         with:
           name: SpectralCrrpt_VST3_win
           path: Builds/win-release/SpectralCrrpt_artefacts/Release/VST3/*
+
+      - name: Package official Windows binaries
+        if: github.repository == 'Dirty-Octopus/spectral-corruptor'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force Builds/release-packages
+          Compress-Archive -Path Builds/win-release/SpectralCrrpt_artefacts/Release/VST3/*.vst3 -DestinationPath Builds/release-packages/SpectralCorruptor-Windows.zip
+
+      - name: Upload official Windows package
+        if: github.repository == 'Dirty-Octopus/spectral-corruptor'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OfficialReleaseWindows
+          path: Builds/release-packages/SpectralCorruptor-Windows.zip
+          if-no-files-found: error
+
+  release-packages:
+    name: Collect official release packages
+    if: github.repository == 'Dirty-Octopus/spectral-corruptor'
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: OfficialRelease*
+          merge-multiple: true
+          path: release-packages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OfficialReleasePackages
+          path: release-packages/*.zip
+          if-no-files-found: error

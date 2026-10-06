@@ -12,6 +12,10 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
 {
     setLookAndFeel (&look); setOpaque (true);
     addAndMakeVisible (presets); addAndMakeVisible (inputSpectrum); addAndMakeVisible (outputSpectrum);
+    undoButton.setTooltip ("Undo (Cmd/Ctrl+Z)"); redoButton.setTooltip ("Redo (Cmd/Ctrl+Shift+Z)");
+    undoButton.onClick = [this] { if (processor.undo()) { rebuildRack(); rebuildInspector(); } };
+    redoButton.onClick = [this] { if (processor.redo()) { rebuildRack(); rebuildInspector(); } };
+    addAndMakeVisible (undoButton); addAndMakeVisible (redoButton);
     licenseButton.setComponentID ("license-status");
     licenseButton.onClick = [this] { settingsPanel.setVisible (false); cancelDrag(); browser.setVisible (false); macroPanel.setVisible (false); licensePanel.setVisible (true); licensePanel.toFront (true); };
     licensePanel.changed = [this] { updateLicenseStatus(); };
@@ -152,6 +156,7 @@ EditorContent::~EditorContent()
 }
 void EditorContent::timerCallback()
 {
+    undoButton.setEnabled (processor.canUndo()); redoButton.setEnabled (processor.canRedo());
     if (revision != processor.getStructureRevision()) { cancelDrag(); rebuildRack(); }
     if (shownLanguage != PromptLanguage::get()) refreshLanguage();
     if (std::abs (shownFrequencyLimit - processor.getFrequencyLimit()) > .5f)
@@ -498,6 +503,20 @@ void EditorContent::cancelDrag()
 }
 bool EditorContent::keyPressed (const juce::KeyPress& key)
 {
+    if (key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown())
+    {
+        if (key.getTextCharacter() == 'z' || key.getTextCharacter() == 'Z')
+        {
+            const bool changed = key.getModifiers().isShiftDown() ? processor.redo() : processor.undo();
+            if (changed) { rebuildRack(); rebuildInspector(); }
+            return true;
+        }
+        if ((key.getTextCharacter() == 'y' || key.getTextCharacter() == 'Y') && key.getModifiers().isCtrlDown())
+        {
+            if (processor.redo()) { rebuildRack(); rebuildInspector(); }
+            return true;
+        }
+    }
     if (key == juce::KeyPress::escapeKey && (licensePanel.isVisible() || macroPanel.isVisible() || settingsPanel.isVisible()))
     { licensePanel.setVisible (false); macroPanel.setVisible (false); settingsPanel.setVisible (false); return true; }
     if (key == juce::KeyPress::escapeKey && modulationPage.isVisible()) { modulationPage.setVisible (false); modulationButton.setToggleState (false, juce::dontSendNotification); return true; }
@@ -602,6 +621,8 @@ void EditorContent::resized()
     settingsButton.setBounds (headerArea.withTrimmedLeft (headerArea.getWidth() - 84));
     auto presetRow = area.removeFromTop (34);
     licenseButton.setBounds (presetRow.removeFromRight (106)); presetRow.removeFromRight (8);
+    redoButton.setBounds (presetRow.removeFromRight (58).reduced (2, 1));
+    undoButton.setBounds (presetRow.removeFromRight (58).reduced (2, 1));
     presets.setBounds (presetRow); area.removeFromTop (10);
     auto spectra = area.removeFromTop (juce::jlimit (154, 196, (getHeight() - 100) / 4));
     const int half = (spectra.getWidth() - 8) / 2;

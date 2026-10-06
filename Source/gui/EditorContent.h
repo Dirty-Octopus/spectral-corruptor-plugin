@@ -61,6 +61,7 @@ private:
     PresetBar presets;
     LicensePanel licensePanel;
     juce::TextButton licenseButton;
+    juce::TextButton undoButton { "UNDO" }, redoButton { "REDO" };
     HeaderSettingsButton settingsButton;
     SettingsPanel settingsPanel;
     PromptLanguage::Language shownLanguage { PromptLanguage::get() };

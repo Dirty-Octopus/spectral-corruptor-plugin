@@ -55,6 +55,10 @@ public:
     void setModuleParameter (int channel, const juce::String& uid,
                              const juce::Identifier& key, const juce::var& value);
     bool applyPreset (const juce::ValueTree&);
+    bool undo();
+    bool redo();
+    bool canUndo() const noexcept { return undoPosition > 0; }
+    bool canRedo() const noexcept { return undoPosition + 1 < undoHistory.size(); }
     juce::String getCurrentPresetName() const;
     bool isPresetDirty() const { return presetDirty.load(); }
     void setPresetName (const juce::String&);
@@ -108,6 +112,10 @@ private:
     std::vector<scrr::params::MacroMapping> macroMappings;
     std::array<juce::String, 8> macroNames;
     std::atomic<uint64_t> macroNameRevision {};
+    std::vector<juce::ValueTree> undoHistory;
+    size_t undoPosition {};
+    bool applyingUndoState {};
+    void recordUndoState();
     std::array<std::atomic<float>*, 8> macroParameters {};
     double macroBase (const scrr::params::MacroMapping&) const;
     bool describeMacroTarget (scrr::params::MacroMapping&) const;
