@@ -25,6 +25,25 @@ jobs:
       - name: Test
         run: ctest --test-dir Builds/mac-release --output-on-failure
 
+      - name: Verify Universal architecture and macOS minimum version
+        run: |
+          python3 - <<'PYVERIFY'
+          from pathlib import Path
+          import re
+          import subprocess
+          binaries = list(Path('Builds/mac-release/SpectralCrrpt_artefacts/Release').glob('*/*/Contents/MacOS/*'))
+          assert len(binaries) == 3, binaries
+          for binary in binaries:
+              archs = subprocess.check_output(['lipo', '-archs', str(binary)], text=True).split()
+              assert set(archs) == {'arm64', 'x86_64'}, (binary, archs)
+              for arch in archs:
+                  output = subprocess.check_output(['otool', '-arch', arch, '-l', str(binary)], text=True)
+                  versions = re.findall(r'cmd LC_BUILD_VERSION\s+cmdsize \d+\s+platform \d+\s+minos ([\d.]+)', output)
+                  versions += re.findall(r'cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([\d.]+)', output)
+                  assert versions and all(v in ('11.0', '11.0.0') for v in versions), (binary, arch, versions)
+              print(binary.name + ': arm64 + x86_64, minimum macOS 11.0')
+          PYVERIFY
+
       - name: Package official macOS binaries
         if: github.repository == 'Dirty-Octopus/spectral-corruptor'
         run: |

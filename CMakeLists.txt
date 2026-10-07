@@ -1,7 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
 
+if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum supported macOS version")
+endif()
+
 project(SpectralCrrpt
-    VERSION 0.1.0
+    VERSION 0.1.1
     DESCRIPTION "Spectral Corruptor - FFT spectral corruption audio plugin"
     LANGUAGES C CXX)
 
