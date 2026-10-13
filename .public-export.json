@@ -1,10 +1,10 @@
 {
   "format": 1,
-  "source_commit": "1967db62e4ca973346415a3a8d92b8ae0a894c7b",
+  "source_commit": "30219ae0dea0657b118db531a84b39c503bc2621",
   "working_tree_preview": false,
   "juce_commit": "51d11a2be6d5c97ccf12b4e5e827006e19f0555a",
   "files": {
-    ".github/workflows/build.yml": "7247f9456a890b245756fd006a9de233d2d6622defd0da16c6355d6d60ecf36b",
+    ".github/workflows/build.yml": "f7d2387807c2421071fc54537db884c06819e75911fc722ba065e9cdcad87d93",
     ".gitignore": "d19e71ab02a685c0a40108b1495fb826ee92a984d3cef582a8101f4833ff43f1",
     ".gitmodules": "52620826b2e1a13d8b790807bcb6b2c1542e96c7c5eefc3ec67402ca15adf886",
     "AGENTS.md": "8d19d490e2b8db910358b5348b4848fcfea3b9cdc873569fe26378cbd99946ce",

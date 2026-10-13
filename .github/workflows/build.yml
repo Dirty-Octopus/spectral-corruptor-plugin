@@ -68,17 +68,22 @@ jobs:
           target='/Library/Audio/Plug-Ins/VST3/Spectral Corruptor.vst3'
           user_target="$HOME/Library/Audio/Plug-Ins/VST3/Spectral Corruptor.vst3"
           source='Builds/mac-release/SpectralCrrpt_artefacts/Release/VST3/Spectral Corruptor.vst3'
-          sudo mkdir -p "$target"
+          sudo mkdir -p "$target/Contents"
+          sudo cp "$source/Contents/Info.plist" "$target/Contents/Info.plist"
+          sudo /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 0.1.1' "$target/Contents/Info.plist"
+          sudo /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.1.1' "$target/Contents/Info.plist"
           sudo touch "$target/obsolete-version-marker.txt"
           mkdir -p "$user_target/Contents"
           cp "$source/Contents/Info.plist" "$user_target/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 0.1.1' "$user_target/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.1.1' "$user_target/Contents/Info.plist"
           touch "$user_target/obsolete-version-marker.txt"
           for attempt in 1 2; do
             sudo installer -pkg Builds/release-packages/SpectralCorruptor-macOS.pkg -target /
             cmp "$source/Contents/MacOS/Spectral Corruptor" "$target/Contents/MacOS/Spectral Corruptor"
             cmp "$source/Contents/MacOS/Spectral Corruptor" "$user_target/Contents/MacOS/Spectral Corruptor"
-            test ! -e "$target/obsolete-version-marker.txt"
-            test ! -e "$user_target/obsolete-version-marker.txt"
+            if [ -e "$target/obsolete-version-marker.txt" ]; then echo 'System bundle was not replaced'; exit 1; fi
+            if [ -e "$user_target/obsolete-version-marker.txt" ]; then echo 'User bundle was not replaced'; exit 1; fi
           done
 
       - name: Upload official macOS package
