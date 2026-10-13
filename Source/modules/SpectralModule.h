@@ -23,6 +23,7 @@ public:
     virtual void beginChannel (int channelIndex) { juce::ignoreUnused (channelIndex); }
     virtual void updateParameters (const juce::ValueTree& state) { juce::ignoreUnused (state); }
     virtual void reset() {}
+    virtual void setTempo (double bpm) noexcept { juce::ignoreUnused (bpm); }
     virtual bool isTimeDomain() const noexcept { return false; }
 
     virtual void processSpectrum (std::complex<float>* spectrum, int numBins, double sampleRate) = 0;

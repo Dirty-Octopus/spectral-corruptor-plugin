@@ -159,6 +159,7 @@ void EditorContent::timerCallback()
     undoButton.setEnabled (processor.canUndo()); redoButton.setEnabled (processor.canRedo());
     if (revision != processor.getStructureRevision()) { cancelDrag(); rebuildRack(); }
     if (shownLanguage != PromptLanguage::get()) refreshLanguage();
+    if (shownUiScale != UiScale::get()) { shownUiScale = UiScale::get(); settingsPanel.refresh(); }
     if (std::abs (shownFrequencyLimit - processor.getFrequencyLimit()) > .5f)
     {
         displayedChain = processor.getModuleChain (channel);
@@ -257,6 +258,11 @@ void EditorContent::updateCardParameters()
                     const auto value = processor.getEffectiveValue (channel, selectedUid, key, param.fromTree (child));
                     child.setProperty (key, std::isfinite (value) ? juce::jlimit ((double) param.minVal, (double) param.maxVal, value) : param.defaultVal, nullptr);
                 }
+            if (type == "Delay")
+            {
+                scrr::params::HostBeat beat; processor.readHostBeat (beat);
+                child.setProperty ("tempo", beat.bpm, nullptr);
+            }
             card.setParameterPreview (child); break;
         }
 }
@@ -451,6 +457,13 @@ void EditorContent::rebuildInspector()
                 if (id == "track")
                     for (auto& c : safe->controls)
                         if (c->getComponentID() == "fundamental") { c->setEnabled (! (bool) value); c->setAlpha ((bool) value ? .4f : 1.0f); }
+                if (id == "sync")
+                    for (auto& c : safe->controls)
+                        if (c->getComponentID() == "time" || c->getComponentID() == "division")
+                        {
+                            const bool available = c->getComponentID() == "division" ? (bool) value : ! (bool) value;
+                            c->setEnabled (available); c->setAlpha (available ? 1.0f : .4f);
+                        }
                 if (id == "rangeLow" || id == "rangeHigh")
                 {
                     safe->displayedChain = safe->processor.getModuleChain (targetChannel); safe->updateRange();
@@ -479,6 +492,14 @@ void EditorContent::rebuildInspector()
         makeControl (scrr::dsp::makeFloat ("moduleMix", "STAGE MIX", 0, 100, 100, .1f, " %"), true);
     }
     for (const auto& param : spec->params) makeControl (param, false);
+    if (type == "Delay")
+        for (auto& c : controls)
+            if (c->getComponentID() == "time" || c->getComponentID() == "division")
+            {
+                const bool sync = (bool) child.getProperty ("sync", false);
+                const bool available = c->getComponentID() == "division" ? sync : ! sync;
+                c->setEnabled (available); c->setAlpha (available ? 1.0f : .4f);
+            }
     if ((bool) child.getProperty ("track", false))
         for (auto& c : controls)
             if (c->getComponentID() == "fundamental") { c->setEnabled (false); c->setAlpha (.4f); }
@@ -650,7 +671,7 @@ void EditorContent::resized()
     browser.setBounds (detailArea);
     orderNotice.setBounds (detailArea.reduced (14, 0).withTrimmedTop (10).withHeight (48));
     modulationPage.setBounds (rackArea.getUnion (detailArea));
-    settingsPanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (520, getWidth() - 48), 414));
+    settingsPanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (520, getWidth() - 48), 554));
     licensePanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (620, getWidth() - 48), 452));
     macroPanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (900, getWidth() - 48), 470));
     inspectorViewport.setBounds (detail); emptyArea = detailArea;
@@ -679,8 +700,10 @@ void EditorContent::resized()
     outputGain.setBounds (mw / 2 + 4, my, mw / 2 - 6, 72 + outputGain.modulationHeight());
     my += 93 + gainModulationHeight;
     const int fftWidth = mw * 3 / 5;
+    const int fftTop = my - 21;
     fftSize.setBounds (2, my, fftWidth - 6, 28); oversample.setBounds (fftWidth + 4, my, mw - fftWidth - 6, 28); my += 34;
     window.setBounds (2, my, mw - 4, 26); my += 47;
+    fftBackground = { 0, fftTop, mw, my - fftTop - 20 };
     place (splitCount); place (crossfade);
     masterContent.setSize (mw, my - 10);
     bypass.setBounds (masterArea.getX() + 12, masterArea.getBottom() - 36, 115, 28);
@@ -699,6 +722,10 @@ void EditorContent::paint (juce::Graphics& g)
     Theme::text (g, "dir.oct.", mark.reduced (18, 0).withTrimmedBottom (17), 35, Theme::black(), true);
     Theme::text (g, "DIRTY OCTOPUS", mark.reduced (18, 0).withTrimmedTop (50), 10, Theme::black(), true);
     g.setColour (Theme::yellow()); g.fillRect (masterArea);
+    auto fftStripe = getLocalArea (&masterContent, fftBackground);
+    fftStripe.setX (masterArea.getX()); fftStripe.setWidth (masterArea.getWidth());
+    fftStripe = fftStripe.getIntersection (masterArea.withY (masterViewport.getY()).withHeight (masterViewport.getHeight()));
+    g.setColour (Theme::blue()); g.fillRect (fftStripe);
     Theme::text (g, "MASTER / ENGINE", masterArea.reduced (12, 0).withHeight (31), 14, Theme::black(), true);
     auto bypassBlock = bypass.getBounds().expanded (4, 0); g.setColour (Theme::black()); g.fillRect (bypassBlock);
     const double sr = processor.getProcessor().getSampleRate();

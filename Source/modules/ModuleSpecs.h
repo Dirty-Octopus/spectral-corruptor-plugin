@@ -5,6 +5,7 @@
 
 #include <juce_core/juce_core.h>
 #include <vector>
+#include "DelayTiming.h"
 
 #ifdef __clang__
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
@@ -224,6 +225,8 @@ inline const std::vector<ModuleSpec>& getModuleSpecs()
         makeFloat ("mix", "Mix", 0, 100, 25, .1f, " %") });
     add ("Delay", "Delay", {
         makeChoice ("mode", "Mode", { "Normal", "Tap Delay", "Ping-Pong" }, 0),
+        makeBool ("sync", "Sync", false),
+        [] { auto p = makeChoice ("division", "Beat", {}, 0); p.choices = delayDivisions(); p.maxVal = (float) (p.choices.size() - 1); p.defaultVal = (float) defaultDelayDivision; return p; }(),
         makeFloat ("time", "Time", 1, 2000, 300, .1f, " ms", true),
         makeFloat ("feedback", "Feedback", 0, 95, 35, .1f, " %"),
         makeFloat ("mix", "Mix", 0, 100, 30, .1f, " %") });

@@ -36,6 +36,7 @@ public:
     std::array<float, 4> getPreBandLevels() const noexcept { return preBandLevels; }
 
     void process (juce::AudioBuffer<float>& buffer);
+    void setTempo (double bpm) noexcept { if (std::isfinite (bpm) && bpm > 0) tempo = bpm; }
 
     int  getLatencySamples() const noexcept;
     int  getFFTSize()  const noexcept { return fft.getFFTSize(); }
@@ -104,6 +105,7 @@ private:
     std::vector<std::complex<float>> moduleDry;
     void processChain (std::vector<ModuleSlot>&, std::complex<float>*, int, double);
     double sampleRate { 44100.0 };
+    double tempo { 120 };
     int    numChannels { 2 };
     int    maxBlockSize { 512 };
 

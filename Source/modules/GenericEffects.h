@@ -4,6 +4,7 @@
 #pragma once
 #include "SpectralModule.h"
 #include "GenericCurves.h"
+#include "DelayTiming.h"
 #include <juce_dsp/juce_dsp.h>
 #include <array>
 #include <cmath>
@@ -30,13 +31,16 @@ public:
     void prepare (double sr, int) override
     {
         rate = sr;
-        for (auto& channel : ring) channel.assign ((size_t) std::ceil (sr * 2.01) + 4, 0);
+        for (auto& channel : ring) channel.assign ((size_t) std::ceil (sr * (maximumDelayMs * .001 + .01)) + 4, 0);
         smoothing = (float) (1 - std::exp (-1 / (sr * .025))); reset();
     }
-    void reset() override { for (auto& c : ring) std::fill (c.begin(), c.end(), 0); write = 0; currentTime = timeMs; }
+    void reset() override { for (auto& c : ring) std::fill (c.begin(), c.end(), 0); write = 0; currentTime = delayTimeMs (sync, division, timeMs, tempo); }
+    void setTempo (double bpm) noexcept override { if (std::isfinite (bpm) && bpm > 0) tempo = bpm; }
     void updateParameters (const juce::ValueTree& s) override
     {
         mode = (int) effectValue (s, "mode", 0, 0, 2);
+        sync = (bool) s.getProperty ("sync", false);
+        division = (int) effectValue (s, "division", (float) defaultDelayDivision, 0, 20);
         timeMs = effectValue (s, "time", 300, 1, 2000);
         feedback = effectValue (s, "feedback", 35, 0, 95) * .01f;
         mix = effectValue (s, "mix", 30, 0, 100) * .01f;
@@ -45,9 +49,10 @@ public:
     {
         const int channels = juce::jmin (2, b.getNumChannels());
         if (ring[0].empty()) return;
+        const float targetTime = delayTimeMs (sync, division, timeMs, tempo);
         for (int i = 0; i < b.getNumSamples(); ++i)
         {
-            currentTime += smoothing * (timeMs - currentTime);
+            currentTime += smoothing * (targetTime - currentTime);
             std::array<float, 2> input {}, delayed {}, wet {};
             for (int c = 0; c < channels; ++c)
             {
@@ -78,6 +83,7 @@ private:
     }
     std::array<std::vector<float>, 2> ring;
     size_t write {}; double rate { 44100 };
+    double tempo { 120 }; bool sync {}; int division { defaultDelayDivision };
     int mode {}; float timeMs { 300 }, currentTime { 300 }, smoothing {}, feedback { .35f }, mix { .3f };
 };
 

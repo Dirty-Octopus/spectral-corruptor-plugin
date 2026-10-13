@@ -348,7 +348,10 @@ void SpectralProcessor::process (juce::AudioBuffer<float>& buffer)
         if (active)
         {
             for (auto& slot : chains[r + 1]) if (slot.module && slot.enabled && slot.module->isTimeDomain())
+            {
+                slot.module->setTempo (tempo);
                 slot.module->processBuffer (route, sampleRate * oversampleFactor);
+            }
         }
         else
         {

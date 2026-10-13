@@ -8,7 +8,7 @@
 
 namespace scrr::gui { class EditorContent; }
 
-class SpectralCrrptEditor : public juce::AudioProcessorEditor
+class SpectralCrrptEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit SpectralCrrptEditor (SpectralCrrptProcessor&);
@@ -18,6 +18,9 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
+    void applyUiScale();
+    double uiScale { 1.0 };
     SpectralCrrptProcessor& processorRef;
     std::unique_ptr<scrr::gui::EditorContent> content;
 

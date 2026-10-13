@@ -926,6 +926,69 @@ TEST_CASE ("GENERIC delay modes place distinct taps and ping-pong alternates cha
     }
 }
 
+TEST_CASE ("Delay Sync divisions place audible echoes on host beats")
+{
+    for (int division = 0; division < 21; ++division)
+    {
+        auto state = scrr::dsp::createDefaultModuleState ("Delay");
+        state.setProperty ("sync", true, nullptr); state.setProperty ("division", division, nullptr);
+        state.setProperty ("mix", 100, nullptr); state.setProperty ("feedback", 0, nullptr);
+        scrr::dsp::GenericDelay delay; delay.setTempo (120); delay.updateParameters (state); delay.prepare (8000, 129);
+        const float milliseconds = scrr::dsp::delayTimeMs (true, division, 300, 120);
+        const int sample = (int) std::floor (milliseconds * 8);
+        juce::AudioBuffer<float> audio (2, sample + 5); audio.clear(); audio.setSample (0, 0, 1);
+        delay.processBuffer (audio, 8000);
+        REQUIRE (audio.getMagnitude (0, 0, sample) < .001f);
+        REQUIRE (audio.getSample (0, sample) + audio.getSample (0, sample + 1) > .99f);
+    }
+    REQUIRE (std::abs (scrr::dsp::delayTimeMs (true, 13, 300, 120) - 500) < .001f);
+    REQUIRE (std::abs (scrr::dsp::delayTimeMs (true, 14, 300, 120) - 750) < .001f);
+    REQUIRE (std::abs (scrr::dsp::delayTimeMs (true, 12, 300, 120) - 1000.0f / 3) < .001f);
+    REQUIRE (std::abs (scrr::dsp::delayTimeMs (true, 20, 300, .001) - 8000) < .001f);
+}
+
+TEST_CASE ("Delay follows changing host tempo, keeps free time, and restores sync state")
+{
+    class PlayHead : public juce::AudioPlayHead
+    {
+    public:
+        double bpm { 120 };
+        juce::Optional<PositionInfo> getPosition() const override { PositionInfo p; p.setBpm (bpm); return p; }
+    } playHead;
+    auto synced = testProcessor(), manual = testProcessor();
+    for (auto* p : { synced.get(), manual.get() })
+    {
+        setParam (*p, scrr::params::id::oversample, 1); setParam (*p, scrr::params::id::fftSizeExtended, 1);
+        p->addModule (1, "Delay"); const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString();
+        p->setModuleParameter (1, uid, "mix", 100); p->prepareToPlay (8000, 64);
+    }
+    const auto uid = synced->getModuleChain (1).getChild (0)["uid"].toString();
+    const auto manualUid = manual->getModuleChain (1).getChild (0)["uid"].toString();
+    synced->setModuleParameter (1, uid, "sync", true); synced->setPlayHead (&playHead);
+    juce::MidiBuffer midi; int position = 0;
+    for (double bpm : { 120.0, 90.0, 180.0 })
+    {
+        playHead.bpm = bpm;
+        manual->setModuleParameter (1, manualUid, "time", 60000 / bpm);
+        for (int block = 0; block < 100; ++block)
+        {
+            juce::AudioBuffer<float> a (2, 64), b (2, 64);
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < 64; ++i)
+                a.setSample (c, i, .2f * std::sin ((float) (position + i) * .13f));
+            b.makeCopyOf (a); synced->processBlock (a, midi); manual->processBlock (b, midi); position += 64;
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < 64; ++i)
+                REQUIRE (std::abs (a.getSample (c, i) - b.getSample (c, i)) < 1.0e-5f);
+        }
+    }
+    synced->setPlayHead (nullptr);
+    auto restored = testProcessor(); REQUIRE (restored->applyPreset (synced->copyPresetState()));
+    auto state = restored->getModuleChain (1).getChild (0);
+    REQUIRE ((bool) state["sync"]); REQUIRE ((int) state["division"] == 13); REQUIRE (std::abs ((float) state["time"] - 300) < .001f);
+    auto legacy = synced->copyPresetState(); auto old = legacy.getChildWithName ("ch1").getChild (0);
+    old.removeProperty ("sync", nullptr); old.removeProperty ("division", nullptr);
+    REQUIRE (restored->applyPreset (legacy)); REQUIRE (! (bool) restored->getModuleChain (1).getChild (0)["sync"]);
+}
+
 TEST_CASE ("GENERIC reverb modes have distinct decaying tails and compressor is stereo linked")
 {
     std::array<double, 3> signature {};
@@ -1223,6 +1286,36 @@ TEST_CASE ("Prompt languages persist separately and localize activation and dial
     else std::cout << "[SKIP native localized dialog subsection: no display]\n";
     language->setSelectedId (1, juce::sendNotificationSync); REQUIRE (Lang::read (file) == Lang::Language::english);
     file.replaceWithText ("unknown"); REQUIRE (Lang::read (file) == Lang::Language::english);
+}
+
+TEST_CASE ("UI scale spans 25 to 200 percent and preserves logical layout and sound state")
+{
+    using Scale = scrr::gui::UiScale;
+    const int original = Scale::get();
+    struct Restore { int value; ~Restore() { Scale::set (value); } } restore { original };
+    const auto directory = juce::File::getCurrentWorkingDirectory().getNonexistentChildFile ("scale-regression", "");
+    struct Cleanup { juce::File path; ~Cleanup() { path.deleteRecursively(); } } cleanup { directory };
+    const auto file = directory.getChildFile ("scale.txt");
+    REQUIRE (Scale::read (file) == 100); REQUIRE (Scale::write (175, file)); REQUIRE (Scale::read (file) == 175);
+    file.replaceWithText ("999"); REQUIRE (Scale::read (file) == 100);
+    Scale::set (100);
+    auto p = testProcessor(); const auto before = p->copyPresetState().toXmlString();
+    auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor());
+    scrr::gui::SettingsPanel settings (directory.getChildFile ("language.txt")); settings.setSize (520, 554);
+    auto* choices = dynamic_cast<juce::ComboBox*> (findID (settings, "ui-scale")); REQUIRE (choices != nullptr);
+    REQUIRE (choices->getNumItems() == 8);
+    for (int percent = 25; percent <= 200; percent += 25)
+    {
+        choices->setSelectedId (percent, juce::sendNotificationSync);
+        REQUIRE (Scale::read (file) == percent);
+        REQUIRE (waitForUI ([&] { return editor->getWidth() == juce::roundToInt (1180 * percent * .01); }));
+        REQUIRE (editor->getHeight() == juce::roundToInt (820 * percent * .01));
+        REQUIRE (editor->getChildComponent (0)->getWidth() == 1180);
+        REQUIRE (editor->getChildComponent (0)->getHeight() == 820);
+        REQUIRE (p->copyPresetState().toXmlString() == before);
+    }
+    auto reopened = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor()); REQUIRE (reopened->getWidth() == 2360);
+    Scale::set (100); REQUIRE (waitForUI ([&] { return editor->getWidth() == 1180 && reopened->getWidth() == 1180; }));
 }
 
 TEST_CASE ("Generic card plots respond to parameters and share audio transfer curves")
@@ -1798,6 +1891,16 @@ int main (int argc, char** argv)
             auto* row = findID (*editor, "stage-" + last);
             if (row) { row->mouseUp (mouse (*row, { 50, 20 })); pump (340); }
             capture (type);
+            if (juce::String (type) == "Delay")
+            {
+                auto* syncControl = findID (*editor, "sync");
+                if (syncControl) findButton (*syncControl, "Sync")->triggerClick();
+                pump (80);
+                if (auto* beatControl = findID (*editor, "division"))
+                    for (auto* child : beatControl->getChildren())
+                        if (auto* combo = dynamic_cast<juce::ComboBox*> (child)) combo->setSelectedItemIndex (14, juce::sendNotificationSync);
+                pump (120); capture ("Delay-sync");
+            }
         }
         const auto lfoId = p.addModulator (false); p.addModulator (true);
         auto source = p.getModulators()[0]; source.shape = 5; source.points[0].curve = .4f; source.points[1].curve = -.3f; p.updateModulator (source);
@@ -1860,6 +1963,13 @@ int main (int argc, char** argv)
         genericRow->mouseUp (mouse (*genericRow, invalid, true)); pump (100);
         scrr::gui::PromptLanguage::set (scrr::gui::PromptLanguage::Language::chinese, false); pump (100); capture ("generic-order-chinese");
         dynamic_cast<juce::Button*> (findID (*editor, "settings-button"))->triggerClick(); pump (100); capture ("settings-chinese");
+        const int originalScale = scrr::gui::UiScale::get();
+        for (int percent : { 25, 50, 125, 200 })
+        {
+            scrr::gui::UiScale::set (percent); pump (200);
+            capture ("settings-scale-" + juce::String (percent));
+        }
+        scrr::gui::UiScale::set (originalScale); pump (200);
         dynamic_cast<juce::Button*> (findID (*editor, "license-status"))->triggerClick(); pump (100); capture ("activation-chinese");
         return 0;
     }

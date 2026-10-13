@@ -535,6 +535,7 @@ void SpectralCrrptProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     spectralProcessor.updateGlobalParameters (apvts);
     spectralProcessor.applyPendingReconfigure();
     const double bpm = beat.bpm, ppq = beat.ppq;
+    spectralProcessor.setTempo (bpm);
     const bool playing = beat.playing, timeline = beat.hasTimeline;
     // Bound modulation granularity independently of oversized offline host blocks.
     const int quantum = juce::jmin (preparedBlockSize, 64);

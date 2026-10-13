@@ -52,13 +52,41 @@ jobs:
           cp -R Builds/mac-release/SpectralCrrpt_artefacts/Release/AU/*.component Builds/release-stage/
           cp -R Builds/mac-release/SpectralCrrpt_artefacts/Release/Standalone/*.app Builds/release-stage/
           ditto -c -k --norsrc Builds/release-stage Builds/release-packages/SpectralCorruptor-macOS.zip
+          python3 tools/package_macos.py
+
+      - name: Verify macOS installer payload
+        if: github.repository == 'Dirty-Octopus/spectral-corruptor'
+        run: |
+          pkgutil --expand-full Builds/release-packages/SpectralCorruptor-macOS.pkg Builds/pkg-inspect
+          test -f 'Builds/pkg-inspect/Payload/Library/Audio/Plug-Ins/VST3/Spectral Corruptor.vst3/Contents/Info.plist'
+          test -f 'Builds/pkg-inspect/Payload/Library/Audio/Plug-Ins/Components/Spectral Corruptor.component/Contents/Info.plist'
+          test -f 'Builds/pkg-inspect/Payload/Applications/Spectral Corruptor.app/Contents/Info.plist'
+
+      - name: Verify macOS install and upgrade
+        if: github.repository == 'Dirty-Octopus/spectral-corruptor'
+        run: |
+          target='/Library/Audio/Plug-Ins/VST3/Spectral Corruptor.vst3'
+          user_target="$HOME/Library/Audio/Plug-Ins/VST3/Spectral Corruptor.vst3"
+          source='Builds/mac-release/SpectralCrrpt_artefacts/Release/VST3/Spectral Corruptor.vst3'
+          sudo mkdir -p "$target"
+          sudo touch "$target/obsolete-version-marker.txt"
+          mkdir -p "$user_target/Contents"
+          cp "$source/Contents/Info.plist" "$user_target/Contents/Info.plist"
+          touch "$user_target/obsolete-version-marker.txt"
+          for attempt in 1 2; do
+            sudo installer -pkg Builds/release-packages/SpectralCorruptor-macOS.pkg -target /
+            cmp "$source/Contents/MacOS/Spectral Corruptor" "$target/Contents/MacOS/Spectral Corruptor"
+            cmp "$source/Contents/MacOS/Spectral Corruptor" "$user_target/Contents/MacOS/Spectral Corruptor"
+            test ! -e "$target/obsolete-version-marker.txt"
+            test ! -e "$user_target/obsolete-version-marker.txt"
+          done
 
       - name: Upload official macOS package
         if: github.repository == 'Dirty-Octopus/spectral-corruptor'
         uses: actions/upload-artifact@v4
         with:
           name: OfficialReleaseMac
-          path: Builds/release-packages/SpectralCorruptor-macOS.zip
+          path: Builds/release-packages/SpectralCorruptor-macOS.*
           if-no-files-found: error
 
       - name: Upload VST3
@@ -114,12 +142,46 @@ jobs:
           New-Item -ItemType Directory -Force Builds/release-packages
           Compress-Archive -Path Builds/win-release/SpectralCrrpt_artefacts/Release/VST3/*.vst3 -DestinationPath Builds/release-packages/SpectralCorruptor-Windows.zip
 
+      - name: Build Windows installer
+        if: github.repository == 'Dirty-Octopus/spectral-corruptor'
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $compiler)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Could not install Inno Setup' }
+          }
+          $version = [regex]::Match((Get-Content CMakeLists.txt -Raw), 'project\(SpectralCrrpt\s+VERSION ([0-9.]+)').Groups[1].Value
+          $payload = (Resolve-Path Builds/win-release/SpectralCrrpt_artefacts/Release/VST3).Path
+          $output = (Resolve-Path Builds/release-packages).Path
+          & $compiler "/DPluginVersion=$version" "/DPayloadRoot=$payload" "/DOutputRoot=$output" tools/windows-installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+
+      - name: Verify Windows install and upgrade
+        if: github.repository == 'Dirty-Octopus/spectral-corruptor'
+        shell: pwsh
+        run: |
+          $target = "$env:CommonProgramFiles\VST3\Spectral Corruptor.vst3"
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Set-Content "$target\obsolete-version-marker.txt" 'old installation'
+          $source = Get-ChildItem 'Builds/win-release/SpectralCrrpt_artefacts/Release/VST3/Spectral Corruptor.vst3/Contents/x86_64-win/*.vst3' | Select-Object -First 1
+          $installer = (Resolve-Path Builds/release-packages/SpectralCorruptor-Windows-Setup.exe).Path
+          foreach ($attempt in 1..2) {
+            $process = Start-Process $installer -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+            if (Test-Path "$target\obsolete-version-marker.txt") { throw 'Old bundle was not replaced' }
+            $installed = "$target\Contents\x86_64-win\$($source.Name)"
+            if ((Get-FileHash $installed).Hash -ne (Get-FileHash $source.FullName).Hash) { throw 'Installed plugin differs from build' }
+          }
+
       - name: Upload official Windows package
         if: github.repository == 'Dirty-Octopus/spectral-corruptor'
         uses: actions/upload-artifact@v4
         with:
           name: OfficialReleaseWindows
-          path: Builds/release-packages/SpectralCorruptor-Windows.zip
+          path: |
+            Builds/release-packages/SpectralCorruptor-Windows.zip
+            Builds/release-packages/SpectralCorruptor-Windows-Setup.exe
           if-no-files-found: error
 
   release-packages:
@@ -136,5 +198,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: OfficialReleasePackages
-          path: release-packages/*.zip
+          path: release-packages/*
           if-no-files-found: error

@@ -4,6 +4,7 @@
 #pragma once
 #include "Theme.h"
 #include "PromptLanguage.h"
+#include "UiScale.h"
 #include "../parameters/ParamIDs.h"
 namespace scrr::gui {
 class HeaderSettingsButton : public juce::TextButton
@@ -38,6 +39,15 @@ public:
         frequencyLimit.setEnabled (state != nullptr);
         if (state != nullptr) frequencyAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (*state, scrr::params::id::frequencyLimit, frequencyLimit);
         addAndMakeVisible (frequencyLimit);
+        uiScale.setComponentID ("ui-scale");
+        for (int percent = 25; percent <= 200; percent += 25) uiScale.addItem (juce::String (percent) + "%", percent);
+        uiScale.onChange = [this]
+        {
+            UiScale::set (uiScale.getSelectedId());
+            scaleSaved = UiScale::write (UiScale::get(), preference.getSiblingFile ("scale.txt"));
+            repaint();
+        };
+        addAndMakeVisible (uiScale);
         close.onClick = [this] { setVisible (false); };
         addAndMakeVisible (language); addAndMakeVisible (close); refresh();
     }
@@ -45,6 +55,7 @@ public:
     void refresh()
     {
         language.setSelectedId (PromptLanguage::get() == PromptLanguage::Language::chinese ? 2 : 1, juce::dontSendNotification);
+        uiScale.setSelectedId (UiScale::get(), juce::dontSendNotification);
         close.setButtonText (promptText ("CLOSE  x")); repaint();
     }
     void resized() override
@@ -52,6 +63,7 @@ public:
         close.setBounds (getWidth() - 116, 24, 92, 32);
         language.setBounds (24, 108, getWidth() - 48, 38);
         frequencyLimit.setBounds (24, 250, getWidth() - 48, 38);
+        uiScale.setBounds (24, 405, getWidth() - 48, 38);
     }
     void paint (juce::Graphics& g) override
     {
@@ -65,15 +77,19 @@ public:
         g.setFont (Theme::font (13)); g.setColour (Theme::white());
         g.drawFittedText (promptText ("Saved in presets and projects. Higher frequencies bypass spectral effects. GENERIC effects still process the channel."),
                          { 24, 302, getWidth() - 48, 56 }, juce::Justification::topLeft, 3);
-        g.setColour (saved ? Theme::dim() : Theme::red()); g.setFont (Theme::font (12));
+        Theme::text (g, promptText ("UI SCALE"), { 24, 374, getWidth() - 48, 24 }, 13, Theme::white(), true);
+        g.setColour (scaleSaved ? Theme::dim() : Theme::red()); g.setFont (Theme::font (12));
+        g.drawFittedText (promptText (scaleSaved ? "UI scale saved on this computer. Applies to all plugin instances." : "Could not save UI scale. Check folder permissions."),
+                         { 24, 454, getWidth() - 48, 34 }, juce::Justification::topLeft, 2);
+        g.setColour (saved ? Theme::dim() : Theme::red());
         g.drawFittedText (promptText (saved ? "Language saved on this computer. Applies to all plugin instances." : "Could not save language preference. Check folder permissions."),
-                         { 24, 369, getWidth() - 48, 30 }, juce::Justification::topLeft, 2);
+                         { 24, 505, getWidth() - 48, 30 }, juce::Justification::topLeft, 2);
     }
 private:
     juce::File preference;
-    juce::ComboBox language, frequencyLimit;
+    juce::ComboBox language, frequencyLimit, uiScale;
     juce::TextButton close;
-    bool saved { true };
+    bool saved { true }, scaleSaved { true };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> frequencyAttachment;
 };
 }

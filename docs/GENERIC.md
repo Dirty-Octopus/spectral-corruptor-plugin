@@ -5,7 +5,7 @@
 一次频谱分析供四条通道分别重建音频；每个通道有自己的混响、延迟、压缩、失真状态。GENERIC 始终排列在频谱效果之后。试图拖到 FFT 前面，或把 FFT 拖到 GENERIC 后面时，会提示 `GENERIC EFFECTS MUST STAY AT THE END OF THE CHAIN`，取消这次无效移动并保留原有顺序；提示在松手后短暂保留。Utility 也在所属 CH 的时域链中，不再依次作用于已经汇总的所有通道。
 
 - Reverb：Plate / Hall / Room 三组不同长度的八路反馈延迟网络，提供 Decay、Size、Pre-delay、Damping、Mix。Plate 是算法式 plate 风格，不是实测脉冲或硬件仿真。
-- Delay：普通双声道、三抽头 Tap Delay、左右交替 Ping-Pong。Time 1–2000 ms，Feedback 最大 95%，Mix 可调。时间变化经过平滑。
+- Delay：普通双声道、三抽头 Tap Delay、左右交替 Ping-Pong。关闭 Sync 时 Time 为 1–2000 ms；启用 Sync 后 Beat 按宿主 BPM 计算，支持 1/64–1/1 的普通、附点（D）和三连音（T），最长 8 秒。无宿主 BPM 时使用 120 BPM，暂时失去 BPM 时沿用最近值。Feedback 最大 95%，Mix 可调，时间变化经过平滑。旧预设默认关闭 Sync，保留原来的毫秒时间。
 - Compressor：立体声联动的峰值检测，Threshold、Ratio、Attack、Release、Knee、Makeup、Mix。
 - Distortion：Tube、Overdrive、Sin Fold、Lin Fold，加 Drive、Bias、Tone、Output、Mix。Tube 有非对称曲线，输出做 DC 抑制；可使用全局过采样降低高频折叠。
 

@@ -83,7 +83,7 @@ inline juce::String moduleDescription (const juce::String& type)
 {
     if (type == "Notes") return "Markdown preset instructions. Text only; does not process audio.";
     if (type == "Reverb") return "Per-channel algorithmic reverb after spectral processing. Plate, Hall and Room use differently voiced delay networks.";
-    if (type == "Delay") return "Per-channel delay. Tap mode adds three echoes; Ping-Pong alternates left and right. Feedback is limited below self-oscillation.";
+    if (type == "Delay") return "Per-channel delay. Sync follows host BPM; Beat selects straight, dotted (D) or triplet (T) notes. Maximum synced delay: 8 seconds. Tap adds three echoes; Ping-Pong alternates channels.";
     if (type == "Compressor") return "Stereo-linked peak compressor with soft knee, attack, release and parallel mix.";
     if (type == "Distortion") return "Tube, Overdrive, Sin Fold or Lin Fold. Drive shapes the wave; Tone filters the result. Use oversampling for smoother high frequencies.";
     if (type == "SpectralMirror") return "Reflect frequencies around Mirror Centre: output = 2 x centre - input. Frequencies outside the spectrum are removed.";

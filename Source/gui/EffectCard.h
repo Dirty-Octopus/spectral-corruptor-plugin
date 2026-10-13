@@ -223,7 +223,10 @@ private:
         else
         {
             const int mode = (int) value ("mode", 0);
-            const float spacing = value ("time", 300) / 6000, feedback = value ("feedback", 35) * .01f, mix = value ("mix", 30) * .01f;
+            const bool sync = value ("sync", 0) > .5f;
+            const int division = juce::jlimit (0, 20, (int) value ("division", (float) scrr::dsp::defaultDelayDivision));
+            const float ms = scrr::dsp::delayTimeMs (sync, division, value ("time", 300), value ("tempo", 120));
+            const float spacing = ms / 8000, feedback = value ("feedback", 35) * .01f, mix = value ("mix", 30) * .01f;
             g.drawLine (x (0), y (.5f), x (1), y (.5f), 1);
             for (int i = 0; i < 96; ++i)
             {
@@ -242,7 +245,8 @@ private:
                 }
             }
             const char* names[] { "NORMAL", "TAP", "PING-PONG" };
-            caption (juce::String (names[juce::jlimit (0, 2, mode)]) + " / " + juce::String (value ("time", 300), 0) + " ms");
+            caption (juce::String (names[juce::jlimit (0, 2, mode)]) + " / "
+                     + (sync ? scrr::dsp::delayDivisions()[division] + " SYNC / " : juce::String()) + juce::String (ms, 0) + " ms");
         }
     }
     juce::ValueTree values;

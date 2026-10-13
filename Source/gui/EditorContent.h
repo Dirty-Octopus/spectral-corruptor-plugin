@@ -84,6 +84,7 @@ private:
     EffectBrowser browser;
     juce::Viewport rackViewport, inspectorViewport, masterViewport;
     PaintedPanel masterContent;
+    juce::Rectangle<int> fftBackground;
     juce::Component rack, inspector;
     std::vector<std::unique_ptr<ModuleRow>> rows;
     std::vector<std::unique_ptr<ParameterControl>> controls;
@@ -115,5 +116,6 @@ private:
     int dropChannel {};
     int shownSplits {};
     float shownFrequencyLimit {};
+    int shownUiScale { UiScale::get() };
 };
 } // namespace scrr::gui
