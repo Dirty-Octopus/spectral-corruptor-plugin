@@ -372,37 +372,65 @@ TEST_CASE ("Chain drag reorders, cancels outside targets and removes only at the
     auto pStorage = testProcessor(); auto& p = *pStorage;
     for (const auto* type : { "SpectralMirror", "SpectralBloom", "SpectralComb" }) p.addModule (1, type);
     auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p.createEditor());
-    editor->addToDesktop (0); editor->setVisible (true); pump (320);
+    editor->addToDesktop (0); editor->setVisible (true); editor->toFront (true);
     auto* content = dynamic_cast<scrr::gui::EditorContent*> (editor->getChildComponent (0)); REQUIRE (content != nullptr);
     const auto firstUid = p.getModuleChain (1).getChild (0)["uid"].toString();
+    REQUIRE (waitForUI ([&]
+    {
+        auto* ready = findID (*editor, "stage-" + firstUid);
+        return ready && ready->isShowing() && ready->getPosition() == juce::Point<int> (0, 0);
+    }));
     auto* row = findID (*editor, "stage-" + firstUid); REQUIRE (row != nullptr);
     row->mouseDown (mouse (*row, { 20, 20 }));
-    row->mouseDrag (mouse (*row, { 20, 168 }, true)); row->mouseUp (mouse (*row, { 20, 168 }, true)); pump (280);
+    row->mouseDrag (mouse (*row, { 20, 168 }, true)); row->mouseUp (mouse (*row, { 20, 168 }, true));
+    REQUIRE (waitForUI ([&]
+    {
+        auto* moved = findID (*editor, "stage-" + firstUid);
+        return p.getModuleChain (1).getChild (2)["uid"].toString() == firstUid
+            && moved && moved->isShowing() && moved->getPosition() == juce::Point<int> (0, 112);
+    }));
     REQUIRE (p.getModuleChain (1).getChild (2)["uid"].toString() == firstUid);
     row = findID (*editor, "stage-" + firstUid); REQUIRE (row != nullptr);
-    row->mouseDown (mouse (*row, { 20, 20 })); row->mouseDrag (mouse (*row, { -400, -500 }, true)); row->mouseUp (mouse (*row, { -400, -500 }, true)); pump (50);
+    juce::Component::SafePointer<juce::Component> outsideSender (row);
+    row->mouseDown (mouse (*row, { 20, 20 })); row->mouseDrag (mouse (*row, { -400, -500 }, true)); row->mouseUp (mouse (*row, { -400, -500 }, true));
+    // An unchanged chain alone cannot prove the deferred cancellation ran.
+    REQUIRE (waitForUI ([&] { return outsideSender == nullptr && findID (*editor, "stage-" + firstUid) != nullptr; }));
     REQUIRE (p.getModuleChain (1).getNumChildren() == 3);
     row = findID (*editor, "stage-" + firstUid); REQUIRE (row != nullptr);
     // Drop in the centre of the detail panel below the macro row.
     auto target = row->getLocalPoint (content, juce::Point<int> (820, 642)).toFloat();
+    juce::Component::SafePointer<juce::Component> escapedSender (row);
     row->mouseDown (mouse (*row, { 20, 20 })); row->mouseDrag (mouse (*row, target, true));
     content->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
-    row->mouseDrag (mouse (*row, target, true)); row->mouseUp (mouse (*row, target, true)); pump (60);
+    row->mouseDrag (mouse (*row, target, true)); row->mouseUp (mouse (*row, target, true));
+    REQUIRE (waitForUI ([&] { return escapedSender == nullptr && findID (*editor, "stage-" + firstUid) != nullptr; }));
     REQUIRE (p.getModuleChain (1).getNumChildren() == 3);
     // Cancel restores the inspector asynchronously and retires the mouse sender
     // after mouseUp. A new real gesture hit-tests the newly built visible row.
     row = findID (*editor, "stage-" + firstUid); REQUIRE (row != nullptr);
     target = row->getLocalPoint (content, juce::Point<int> (820, 642)).toFloat();
     row->mouseDown (mouse (*row, { 20, 20 })); row->mouseDrag (mouse (*row, target, true));
-    row->mouseUp (mouse (*row, target, true)); pump (70);
+    row->mouseUp (mouse (*row, target, true));
+    REQUIRE (waitForUI ([&] { return p.getModuleChain (1).getNumChildren() == 2 && findID (*editor, "stage-" + firstUid) == nullptr; }));
     REQUIRE (p.getModuleChain (1).getNumChildren() == 2);
     for (const auto& child : p.getModuleChain (1)) REQUIRE (child["uid"].toString() != firstUid);
     REQUIRE (findButton (*editor, "UP") == nullptr); REQUIRE (findButton (*editor, "REMOVE") == nullptr);
-    findButton (*editor, "+ ADD EFFECT")->triggerClick(); pump (30);
+    auto* openBrowser = findButton (*editor, "+ ADD EFFECT"); REQUIRE (openBrowser && openBrowser->isShowing() && openBrowser->isEnabled());
+    openBrowser->triggerClick();
+    REQUIRE (waitForUI ([&] { auto* opened = findID (*editor, "effect-browser"); return opened && opened->isShowing(); }));
     auto* browser = findID (*editor, "effect-browser"); REQUIRE (browser && browser->isVisible());
-    findButton (*browser, "FREQUENCY")->triggerClick(); pump (30);
+    auto* frequency = findButton (*browser, "FREQUENCY"); REQUIRE (frequency && frequency->isShowing() && frequency->isEnabled());
+    frequency->triggerClick();
+    REQUIRE (waitForUI ([&]
+    {
+        auto* choice = findID (*browser, "add-SpectralMirror");
+        return frequency->getToggleState() && choice && choice->isShowing() && choice->isEnabled();
+    }));
     auto* add = dynamic_cast<juce::Button*> (findID (*browser, "add-SpectralMirror")); REQUIRE (add != nullptr);
-    add->triggerClick(); pump (50); REQUIRE (p.getModuleChain (1).getNumChildren() == 3);
+    add->triggerClick();
+    REQUIRE (waitForUI ([&] { return p.getModuleChain (1).getNumChildren() == 3 && ! browser->isVisible(); }));
+    REQUIRE (p.getModuleChain (1).getNumChildren() == 3);
+    REQUIRE (! browser->isVisible());
     editor.reset(); pump (60); // Queued transition / selection callbacks cannot retain an editor.
 }
 

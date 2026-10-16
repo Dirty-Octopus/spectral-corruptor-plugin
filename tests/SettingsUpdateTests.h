@@ -109,14 +109,23 @@ TEST_CASE ("Update helper blocks a modified installer before elevation or execut
     REQUIRE (directory.createDirectory().wasOk()); auto registry=directory.getChildFile("hosts");REQUIRE(registry.createDirectory().wasOk());
     auto installer=directory.getChildFile("fake installer");REQUIRE(installer.replaceWithText("initial"));
     const auto expected=juce::SHA256(installer).toHexString().toLowerCase();REQUIRE(installer.replaceWithText("tampered"));
-    const auto content=scrr::updates::UpdateService::installScript(2147483647,registry,directory.getChildFile("cancel"),installer,expected);
+    auto content=scrr::updates::UpdateService::installScript(2147483647,registry,directory.getChildFile("cancel"),installer,expected);
    #if JUCE_WINDOWS
+    // WinPS 5.1 may inherit a Core-only module path through a native parent.
+    // The safety check must work even when the optional hash cmdlet cannot load.
+    content = content.replace ("$ErrorActionPreference='Stop'\n",
+        "$ErrorActionPreference='Stop'\nfunction Get-FileHash { throw 'Hash cmdlet unavailable in inherited module environment.' }\n");
     auto script=directory.getChildFile("integrity.ps1");juce::StringArray command{"powershell.exe","-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",script.getFullPathName()};
    #else
     auto script=directory.getChildFile("integrity.sh");juce::StringArray command{"/bin/sh",script.getFullPathName()};
    #endif
     REQUIRE(scrr::updates::UpdateService::writeInstallScript(script, content));juce::ChildProcess helper;REQUIRE(helper.start(command));REQUIRE(helper.waitForProcessToFinish(5000));
-    REQUIRE(helper.getExitCode()!=0);REQUIRE(directory.getChildFile("result.txt").loadFileAsString().containsIgnoreCase("checksum"));
+    const auto result = directory.getChildFile ("result.txt").loadFileAsString();
+    const auto output = helper.readAllProcessOutput();
+    if (helper.getExitCode() == 0 || ! result.containsIgnoreCase ("checksum"))
+        std::cerr << "[UPDATE HELPER] exit=" << helper.getExitCode() << " directory=" << directory.getFullPathName()
+                  << "\n[UPDATE HELPER OUTPUT]\n" << output << "\n[UPDATE HELPER RESULT]\n" << result << '\n';
+    REQUIRE(helper.getExitCode()!=0);REQUIRE(result.containsIgnoreCase("checksum"));
     REQUIRE(directory.deleteRecursively());
 }
 

@@ -286,7 +286,18 @@ function Wait-AudioHosts {
   } while($true)
 }
 function Verify-Installer {
-  if((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLower() -ne $expected){throw 'Installer checksum changed; installation blocked.'}
+  # Native children of PowerShell Core can inherit an incompatible PSModulePath.
+  # Use .NET directly so Windows PowerShell 5.1 need not autoload Get-FileHash.
+  $fileStream=$null; $algorithm=$null
+  try {
+    $algorithm=[System.Security.Cryptography.SHA256]::Create()
+    $fileStream=[System.IO.File]::OpenRead($installer)
+    $actual=[System.BitConverter]::ToString($algorithm.ComputeHash($fileStream)).Replace('-','').ToLowerInvariant()
+    if($actual -ne $expected){throw 'Installer checksum changed; installation blocked.'}
+  } finally {
+    if($fileStream){$fileStream.Dispose()}
+    if($algorithm){$algorithm.Dispose()}
+  }
 }
 try {
   if(-not $ElevatedInstall){
