@@ -25,11 +25,14 @@ TEST_CASE ("Undo and redo compare saved contents and preserve the future until a
 TEST_CASE ("The first native edit enables Undo and a fresh branch disables Redo")
 {
     if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr) return;
-    auto p = testProcessor();
+    auto p = testProcessor(); REQUIRE (! p->canUndo()); REQUIRE (! p->canRedo());
     auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor());
-    editor->addToDesktop (0); editor->setVisible (true); pump (100);
     auto* undo = findButton (*editor, "UNDO"), *redo = findButton (*editor, "REDO"); REQUIRE (undo && redo);
+    // Constructor state must be correct even before the first 30 Hz timer tick.
     REQUIRE (! undo->isEnabled()); REQUIRE (! redo->isEnabled());
+    editor->addToDesktop (0); editor->setVisible (true);
+    REQUIRE (waitForUI ([&] { return ! undo->isEnabled() && ! redo->isEnabled(); }));
+    REQUIRE (! p->canUndo()); REQUIRE (! p->canRedo());
     p->addModule (1, "FrequencyShift"); REQUIRE (waitForUI ([&] { return undo->isEnabled(); }));
     undo->triggerClick(); REQUIRE (waitForUI ([&] { return redo->isEnabled() && p->getModuleChain (1).getNumChildren() == 0; }));
     REQUIRE (! undo->isEnabled());

@@ -164,7 +164,9 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     modulationPage.openMappings = [this] (const juce::String& uid) { macroPanel.showSource (uid); };
     addAndMakeVisible (modulationButton); addChildComponent (modulationPage);
     setWantsKeyboardFocus (true);
-    setSize (1180, 820); updateChannelColours(); selectChannel (1); startTimerHz (30);
+    setSize (1180, 820); updateChannelColours(); selectChannel (1);
+    undoButton.setEnabled (processor.canUndo()); redoButton.setEnabled (processor.canRedo());
+    startTimerHz (30);
 }
 EditorContent::~EditorContent()
 {
