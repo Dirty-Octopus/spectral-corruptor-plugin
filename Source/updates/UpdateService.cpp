@@ -119,9 +119,10 @@ void UpdateService::download()
    #if defined(SCR_SOURCE_EDITION) && SCR_SOURCE_EDITION
     status.message = "Source edition: rebuild the newer source. Official binary installation is disabled.";
     return;
-   #endif
+   #else
     if (operation || status.state != State::available) return;
     status.state = State::downloading; status.message.clear(); operation = 2; notify();
+   #endif
 }
 void UpdateService::run()
 {
@@ -320,7 +321,7 @@ try {
     return "#!/bin/sh\nset -eu\ntrap '' HUP\nexport LC_ALL=C\ncancel=" + shellQuote (cancel.getFullPathName())
         + "\nregistry=" + shellQuote (hosts.getFullPathName()) + "\ninstaller=" + shellQuote (installer.getFullPathName())
         + "\nexpected=" + shellQuote (sha256) + "\norigin=" + shellQuote (juce::String (hostPid) + " " + originIdentity) + R"SC(
-job="${cancel%/*}"
+job=$(/usr/bin/dirname "$cancel")
 result="$job/result.txt"
 # BSD kernel locks release on crashes. Keeping the inode avoids unlink/relock
 # races and a stale on-disk file never counts as an active installation.
@@ -337,7 +338,7 @@ if [ "${1:-}" != --install ]; then printf '%s\n' "$$" > "$job/started"; fi
 seen="$job/seen-hosts.txt"
 [ -f "$seen" ] || printf '%s\n' "$origin" > "$seen"
 remember_hosts() {
-  for file in "$registry"/*.pid; do
+  for file in "$registry/"*.pid; do
     [ -f "$file" ] || continue
     entry=$(/bin/cat "$file" 2>/dev/null) || continue
     case "$entry" in ''|*[!0-9\ ]*) continue;; esac
@@ -390,7 +391,7 @@ if [ "${1:-}" = --install ]; then
         done
         if [ "$selected" = 1 ]; then
           folder=$(/usr/libexec/PlistBuddy -c "Print :$i:attributeSetting" "$choices")
-          case "$folder" in /*) /bin/mkdir -p "$folder";; *) echo 'Invalid saved component directory' > "$result"; exit 1;; esac
+          case "$folder" in "/"*) /bin/mkdir -p "$folder";; *) echo 'Invalid saved component directory' > "$result"; exit 1;; esac
         fi
       fi
       i=$((i+1))

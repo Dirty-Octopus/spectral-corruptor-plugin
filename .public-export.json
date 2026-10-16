@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_commit": "b71d53c33c4e0150c48481ece6c479bc32c1e21d",
+  "source_commit": "25c0e9c3652ec165c53523b829d9543dec3e3017",
   "working_tree_preview": false,
   "juce_commit": "51d11a2be6d5c97ccf12b4e5e827006e19f0555a",
   "files": {
@@ -112,7 +112,7 @@
     "Source/parameters/ParamIDs.h": "d59a257ddac8f14cdcfc58001f6092b25e2aceaf3103913eb2feb2b33f5eeddc",
     "Source/parameters/ParameterLayout.cpp": "0ad209810e9ac9265bfddfcfd89e35305c1ed341528f4e09b8172d150973305e",
     "Source/updates/HostRegistration.h": "8ee116eb9fa193fffedfea92451cc63c9f2596766154d4214b4547fa65072de8",
-    "Source/updates/UpdateService.cpp": "324034af98c6690233d7cc5d14758a19815977cf4baea7d2f591a9d01d430c18",
+    "Source/updates/UpdateService.cpp": "659946e197d35038fbc7d5efb32af97d324b4a3ed2da2d05654e46ad6665b3fe",
     "Source/updates/UpdateService.h": "2e633b032418920436ec460333cd91cbaf0d769d1b031ce833ae1e69d9aa2da7",
     "THIRD_PARTY_NOTICES.md": "3a88a8ffa531b679b00137231bea75f9dcbb6b8ea23bda7a515433f198e486c2",
     "cmake/PublicTests.cmake": "d22b2a1832c935b3d47dfd5814a25d8a0510e532483384506b869eac1eb14de8",
