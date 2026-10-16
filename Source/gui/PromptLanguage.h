@@ -11,8 +11,10 @@ class PromptLanguage
 {
 public:
     enum class Language { english, chinese };
+    inline static juce::File testPreferenceDirectory;
     static juce::File preferenceFile()
     {
+        if (testPreferenceDirectory != juce::File()) return testPreferenceDirectory.getChildFile ("language.txt");
         auto base = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
        #if JUCE_MAC
         base = base.getChildFile ("Application Support");
@@ -47,6 +49,10 @@ inline juce::String promptText (const juce::String& english)
     struct Entry { const char* english; const char* chinese; };
     static constexpr Entry entries[] {
         { "Implement your own licensing backend before using this source build.", u8"请先自行实现授权后端，再使用此源码构建版本。" },
+        { "Newer Version Available", u8"新版本可用" },
+        { "DRAG TO CH / CMD-CTRL: COPY", u8"拖到 CH 移动 / Cmd-Ctrl 拖动复制" },
+        { "DRAG TO DETAIL TARGET TO DELETE", u8"拖到右侧标出的删除区并松开以删除" },
+        { "DROP OUTPUT ON A PARAMETER", u8"将输出拖到参数上以建立调制" },
         { "SETTINGS", u8"设置" }, { "CLOSE  x", u8"关闭  x" }, { "PROMPT LANGUAGE", u8"提示语言" },
         { "Applies to activation and dialogs. Effect names and controls stay in English.", u8"仅切换激活和提示页面的语言。效果名称与操作控件保持英文。" },
         { "Language saved on this computer. Applies to all plugin instances.", u8"语言设置保存在本机，适用于所有插件实例。" },

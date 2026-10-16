@@ -38,14 +38,12 @@ public:
             knob.setTextBoxStyle (juce::Slider::TextBoxRight, false, 49, 20); knob.setTextValueSuffix (" %");
             knob.setRange (0, 100, .01); knob.setDoubleClickReturnValue (true, 0); knob.setScrollWheelEnabled (false);
             knob.setComponentID ("macro-" + juce::String (i + 1)); knob.setName ("Macro " + juce::String (i + 1));
-            knob.setColour (juce::Slider::rotarySliderFillColourId, Theme::channelColour (i));
             addAndMakeVisible (knob);
             attachments[(size_t) i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.getAPVTS(), scrr::params::id::macros[(size_t) i], knob);
             setupParameterGestures (knob);
             knob.setTooltip ("Alt/Option-drag: fine adjustment. Cmd/Ctrl-click or double-click: reset.");
             auto& name = names[(size_t) i]; name.setComponentID ("macro-name-" + juce::String (i + 1));
             name.setEditable (false, true); name.setFont (Theme::font (11, true));
-            name.setColour (juce::Label::backgroundColourId, Theme::panel()); name.setColour (juce::Label::textColourId, Theme::white());
             name.onEditorShow = [this, i] { if (auto* field = names[(size_t) i].getCurrentTextEditor()) field->setInputRestrictions (32); };
             name.onTextChange = [this, i]
             {
@@ -57,10 +55,21 @@ public:
             auto& button = edit[(size_t) i]; button.setComponentID ("macro-map-" + juce::String (i + 1));
             button.onClick = [this, i] { if (openMappings) openMappings (i); }; addAndMakeVisible (button);
         }
-        refresh();
+        refreshColours(); refresh();
     }
     ~MacroBar() override { setLookAndFeel (nullptr); }
     std::function<void(int)> openMappings;
+    void refreshColours()
+    {
+        look.refreshColours();
+        for (int i = 0; i < 8; ++i)
+        {
+            knobs[(size_t) i].setColour (juce::Slider::rotarySliderFillColourId, Theme::channelColour (i));
+            names[(size_t) i].setColour (juce::Label::backgroundColourId, Theme::panel());
+            names[(size_t) i].setColour (juce::Label::textColourId, Theme::white());
+        }
+        repaint();
+    }
     void refreshNames()
     {
         const auto revision = processor.getMacroNameRevision();

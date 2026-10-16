@@ -6,6 +6,7 @@
 #include <juce_core/juce_core.h>
 #include <vector>
 #include "DelayTiming.h"
+#include "SpectralEqualizer.h"
 
 #ifdef __clang__
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
@@ -216,6 +217,24 @@ inline const std::vector<ModuleSpec>& getModuleSpecs()
         makeFloat ("spacing", "Tooth Spacing", 20, 4000, 220, .1f, " Hz", true),
         makeFloat ("offset", "Offset", 0, 100, 0, .1f, " %"),
         makeFloat ("width", "Tooth Width", 2, 98, 35, .1f, " %") });
+    add ("SpectralClipper", "Spectral Clipper", {
+        makeFloat ("threshold", "Threshold", -96, 0, -12, .1f, " dBFS"),
+        makeFloat ("drive", "Drive", 0, 48, 0, .1f, " dB"),
+        makeFloat ("knee", "Knee", 0, 24, 0, .1f, " dB"),
+        makeFloat ("output", "Output", -48, 24, 0, .1f, " dB") });
+    std::vector<ParamSpec> eqParameters;
+    for (int band = 0; band < spectralEqBands; ++band)
+    {
+        const auto label = "Band " + juce::String (band + 1) + " ";
+        auto param = [band, &eqParameters, &label] (ParamSpec p, const char* suffix, const char* name)
+        { p.id = spectralEqParameter (band, suffix); p.label = label + name; eqParameters.push_back (std::move (p)); };
+        param (makeBool ("", "", true), "Enabled", "On");
+        param (makeChoice ("", "", { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut" }, 0), "Type", "Shape");
+        param (makeFloat ("", "", 20, 20000, (float) spectralEqFrequencies[(size_t) band], .1f, " Hz", true), "Freq", "Frequency");
+        param (makeFloat ("", "", -24, 24, 0, .1f, " dB"), "Gain", "Gain");
+        param (makeFloat ("", "", .1f, 18, .70710678f, .001f, "", true), "Q", "Q");
+    }
+    add ("SpectralEqualizer", "Spectral Equalizer", std::move (eqParameters));
     add ("Reverb", "Reverb", {
         makeChoice ("mode", "Space", { "Plate", "Hall", "Room" }, 0),
         makeFloat ("decay", "Decay", .1f, 12, 2.5f, .01f, " s"),

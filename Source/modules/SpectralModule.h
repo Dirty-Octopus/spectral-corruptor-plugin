@@ -20,6 +20,9 @@ public:
     virtual const char* getName() const noexcept = 0;
 
     virtual void prepare (double sampleRate, int numBins) { juce::ignoreUnused(sampleRate, numBins); }
+    /** Sum of the analysis window. A bin-centred sine of peak amplitude A has
+        magnitude A * windowSum / 2; DC and Nyquist use A * windowSum. */
+    virtual void setSpectrumCalibration (double windowSum) { juce::ignoreUnused (windowSum); }
     virtual void beginChannel (int channelIndex) { juce::ignoreUnused (channelIndex); }
     virtual void updateParameters (const juce::ValueTree& state) { juce::ignoreUnused (state); }
     virtual void reset() {}

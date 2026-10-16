@@ -59,6 +59,12 @@ public:
         }
     }
     AssignableSlider* getAssignableSlider() { return numeric ? &slider : nullptr; }
+    void setValueFromState (const juce::var& value)
+    {
+        if (numeric) { if (! slider.isMouseButtonDown()) slider.setValue ((double) value, juce::dontSendNotification); }
+        else if (combo.isVisible()) combo.setSelectedItemIndex ((int) value, juce::dontSendNotification);
+        else toggle.setToggleState ((bool) value, juce::dontSendNotification);
+    }
     void setMacroMappings (const std::vector<scrr::params::MacroMapping>& mappings) { slider.setMappings (mappings); }
     int preferredHeight() const { return 46 + slider.modulationHeight(); }
     void refreshMacro (const scrr::params::ModulationValues& values) { slider.refreshModulation (values); }
@@ -81,6 +87,9 @@ private:
 
 inline juce::String moduleDescription (const juce::String& type)
 {
+    if (type == "SpectralClipper") return "Limit FFT-bin magnitude while preserving phase. Window-calibrated Threshold, Drive, Knee and Output. Not a sample-peak limiter.";
+    if (type == "SpectralEqualizer") return "Eight spectral EQ bands. Drag nodes for frequency/gain, scroll for Q and double-click to reset. Right-click numeric controls to assign modulation.";
+
     if (type == "Notes") return "Markdown preset instructions. Text only; does not process audio.";
     if (type == "Reverb") return "Per-channel algorithmic reverb after spectral processing. Plate, Hall and Room use differently voiced delay networks.";
     if (type == "Delay") return "Per-channel delay. Sync follows host BPM; Beat selects straight, dotted (D) or triplet (T) notes. Maximum synced delay: 8 seconds. Tap adds three echoes; Ping-Pong alternates channels.";

@@ -14,16 +14,31 @@ public:
     void configure (const std::vector<scrr::params::ModulationSource>& sources, const std::vector<scrr::params::MacroMapping>& mappings = {})
     {
         std::vector<Runtime> next; next.reserve (sources.size());
+        std::array<float, scrr::params::maxModulators> nextOutputs {}, nextPhases {};
         for (const auto& s : sources)
         {
             Runtime r; r.source = r.effective = s;
             for (const auto& m : mappings)
                 if (m.channel == scrr::params::MacroMapping::modulationChannel && m.uid == s.uid && m.sourceUid.isEmpty()) r.mappings.push_back (m);
-            for (const auto& old : runtime) if (old.source.uid == s.uid) { r.phase = old.phase; r.envelope = old.envelope; r.randomSmooth = old.randomSmooth; r.smoothReady = old.smoothReady; break; }
+            for (size_t oldIndex = 0; oldIndex < runtime.size(); ++oldIndex)
+            {
+                const auto& old = runtime[oldIndex];
+                if (old.source.uid != s.uid) continue;
+                r.phase = old.phase; r.envelope = old.envelope; r.randomSmooth = old.randomSmooth; r.smoothReady = old.smoothReady;
+                if (s.enabled)
+                {
+                    nextOutputs[next.size()] = outputs[oldIndex].load();
+                    if (! s.envelope) nextPhases[next.size()] = phases[oldIndex].load();
+                }
+                break;
+            }
             next.push_back (std::move (r));
         }
         runtime = std::move (next);
-        for (size_t i = runtime.size(); i < outputs.size(); ++i) { outputs[i].store (0); phases[i].store (0); }
+        // These UI-visible values follow the same stable UIDs as runtime state.
+        // Capture all old slots before publishing, so moving one cannot overwrite
+        // a later source's value. Followers and disabled sources have no phase.
+        for (size_t i = 0; i < outputs.size(); ++i) { outputs[i].store (nextOutputs[i]); phases[i].store (nextPhases[i]); }
     }
     void prepare (double sr) { sampleRate = sr; wasPlaying = false; for (auto& r : runtime) { r.phase = 0; r.envelope = 0; r.randomSmooth = 0; r.smoothReady = false; } }
     void process (const juce::AudioBuffer<float>& input, int offset, int count, const std::array<float, 4>& bands,
@@ -43,7 +58,7 @@ public:
                 for (const auto& route : r.mappings) if (route.parameter == m.parameter) sum += route.offset (macros[(size_t) route.macro]);
                 s.setParameterValue (m.parameter, m.fromBase (r.source.parameterValue (m.parameter), sum));
             }
-            if (! s.enabled) { outputs[index].store (0); continue; }
+            if (! s.enabled) { outputs[index].store (0); phases[index].store (0); continue; }
             float output = 0;
             if (s.envelope)
             {
@@ -60,6 +75,7 @@ public:
                     r.envelope = coefficient * r.envelope + (1 - coefficient) * level;
                 }
                 output = juce::jlimit (0.0f, 1.0f, r.envelope);
+                phases[index].store (0);
             }
             else
             {

@@ -50,6 +50,14 @@ void SpectrogramDisplay::timerCallback()
     repaint();
 }
 void SpectrogramDisplay::mouseDown (const juce::MouseEvent&) { paused = ! paused; repaint(); }
+void SpectrogramDisplay::refreshColours()
+{
+    // The history stores coloured pixels, not reusable magnitudes. Drop those
+    // pixels when its palette changes, including while the display is paused.
+    if (! history.isNull()) history.clear (history.getBounds(), juce::Colours::transparentBlack);
+    bandThemeRevision = ~uint64_t{};
+    updateChannelBands(); repaint();
+}
 void SpectrogramDisplay::mouseMove (const juce::MouseEvent& event)
 {
     const float t = juce::jlimit (0.0f, 1.0f, (float) (event.x - plot.getX()) / (float) juce::jmax (1, plot.getWidth()));
@@ -72,8 +80,9 @@ void SpectrogramDisplay::updateChannelBands()
         if (! channelBands.isNull()) { channelBands = {}; bandRegions.clear(); repaint(); }
         bandSlices = 0; return;
     }
-    if (bandSlices == slices && bandBins == bins && juce::approximatelyEqual (bandHostRate, hostRate) && juce::approximatelyEqual (bandFftRate, fftRate)
+    if (bandThemeRevision == ThemeProfiles::get().revision() && bandSlices == slices && bandBins == bins && juce::approximatelyEqual (bandHostRate, hostRate) && juce::approximatelyEqual (bandFftRate, fftRate)
         && juce::approximatelyEqual (bandCrossfade, crossfade) && channelBands.getWidth() == plot.getWidth() && channelBands.getHeight() == plot.getHeight()) return;
+    bandThemeRevision = ThemeProfiles::get().revision();
     bandSlices = slices; bandBins = bins; bandHostRate = hostRate; bandFftRate = fftRate; bandCrossfade = crossfade;
     channelBands = juce::Image (juce::Image::RGB, plot.getWidth(), plot.getHeight(), false);
     repaint();

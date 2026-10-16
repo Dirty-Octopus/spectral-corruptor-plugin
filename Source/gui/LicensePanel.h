@@ -27,9 +27,14 @@ public:
         };
         close.onClick = [this] { setVisible (false); };
         for (auto* button : { &copy, &activate, &close }) addAndMakeVisible (button);
+        refreshColours(); refreshLanguage();
+    }
+    void refreshColours()
+    {
         activate.setColour (juce::TextButton::buttonColourId, Theme::yellow());
         activate.setColour (juce::TextButton::textColourOffId, Theme::black());
-        refreshLanguage();
+        code.setTextToShowWhenEmpty (promptText ("Paste a code or drop a .sclicense file here"), Theme::dim());
+        repaint();
     }
     void refreshLanguage()
     {

@@ -13,6 +13,8 @@
 #include "PresetBar.h"
 #include "EffectCard.h"
 #include "NotesPanel.h"
+#include "QuickGuide.h"
+#include "SpectralEqEditor.h"
 #include "EffectBrowser.h"
 #include "ModuleRow.h"
 #include "components/ParameterPanel.h"
@@ -47,7 +49,13 @@ private:
     void selectChannel (int);
     void updateRange();
     void dragStage (const juce::String&, juce::Point<int> screen, bool finish, bool duplicate = false);
-    void cancelDrag();
+    void cancelDrag (bool gestureFinished = false);
+    void beginPreview();
+    void previewChannel (int);
+    void endPreview (bool commit);
+    void releaseDragRows();
+    void dragModulationOutput (const juce::String&, juce::Point<int>, bool);
+    void refreshTheme();
     void updateChannelColours();
     void updateLicenseStatus();
     void refreshLanguage();
@@ -64,6 +72,22 @@ private:
     juce::TextButton undoButton { "UNDO" }, redoButton { "REDO" };
     HeaderSettingsButton settingsButton;
     SettingsPanel settingsPanel;
+    QuickGuide quickGuide;
+    SpectralEqEditor eqEditor;
+    std::shared_ptr<scrr::updates::UpdateService> updates;
+    juce::TextButton updateNotice;
+    uint64_t shownThemeRevision {};
+    bool guideConsidered {};
+    int shownEqBand { -1 };
+    std::vector<std::unique_ptr<ModuleRow>> retainedDragRows;
+    juce::Component::SafePointer<ModuleRow> dragOrigin;
+    bool stageGestureActive {};
+    bool previewing {};
+    int previewOriginChannel { 1 }, hoverChannel {};
+    juce::String previewOriginUid, hoverModuleUid, draggingSource, cancelledSource;
+    juce::Point<int> previewOriginRackScroll, previewOriginInspectorScroll;
+    double hoverStarted {}, moduleHoverStarted {};
+    juce::Component::SafePointer<AssignableSlider> sourceDropTarget;
     PromptLanguage::Language shownLanguage { PromptLanguage::get() };
     MacroBar macroBar;
     MacroMappingPanel macroPanel;

@@ -43,6 +43,7 @@ public:
     int  getNumBins()  const noexcept { return fft.getNumBins(); }
     int  getOversampleFactor() const noexcept { return displayOversample.load(); }
     float getChannelLevel (int channel) const noexcept { return channelLevels[(size_t) juce::jlimit (0, 3, channel)].load(); }
+    int getSoloChannel() const noexcept { return soloChannel.load(); }
     void setSoloChannel (int ch) { soloChannel.store (juce::jlimit (0, 3, ch)); }
     bool copyLastMagnitudes (std::vector<float>& out, double* rate = nullptr, bool input = false) const { return fft.copyLastMagnitudes (out, rate, input); }
 

@@ -61,8 +61,23 @@ class AssignableSlider : public juce::Slider
     };
 public:
     std::function<void()> mappingMenu;
+    // Assigned only to routable target parameters. Source controls intentionally
+    // leave this empty: modulation sources cannot route into other sources.
+    std::function<void(const juce::String&)> receiveModulationSource;
     std::function<void(scrr::params::MacroMapping)> changeMapping;
     std::function<void(scrr::params::MacroMapping)> unmapRoute;
+    bool canReceiveModulationSource() const { return isEnabled() && (bool) receiveModulationSource; }
+    bool dropModulationSource (const juce::String& uid)
+    {
+        if (uid.isEmpty() || ! canReceiveModulationSource()) return false;
+        receiveModulationSource (uid); return true;
+    }
+    void setModulationDropHighlight (bool highlighted)
+    {
+        highlighted = highlighted && canReceiveModulationSource();
+        if (dropHighlighted != highlighted) { dropHighlighted = highlighted; repaint(); }
+    }
+    bool isModulationDropHighlighted() const noexcept { return dropHighlighted; }
     void setMacroControlled (bool value) { mapped = value; setTextBoxIsEditable (true); }
     bool isMacroControlled() const noexcept { return mapped; }
     int modulationHeight() const noexcept { return (int) strips.size() * 15; }
@@ -91,8 +106,14 @@ public:
         if (event.mods.isPopupMenu()) { if (mappingMenu) mappingMenu(); return; }
         juce::Slider::mouseDown (event);
     }
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (! dropHighlighted) return;
+        g.setColour (Theme::yellow().withAlpha (.14f)); g.fillRect (getLocalBounds());
+        g.setColour (Theme::yellow()); g.drawRect (getLocalBounds(), 2);
+    }
 private:
-    bool mapped {};
+    bool mapped {}, dropHighlighted {};
     scrr::params::ModulationValues values {};
     std::vector<std::unique_ptr<Strip>> strips;
 };

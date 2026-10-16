@@ -5,15 +5,22 @@
 namespace scrr::gui {
 PresetBar::PresetBar (SpectralCrrptProcessor& p, juce::File libraryDirectory) : processor (p), manager (libraryDirectory)
 {
-    for (auto* b : { &preset, &previous, &next, &save, &exportButton, &load }) addAndMakeVisible (b);
+    for (auto* b : std::array<juce::Button*, 6> { &preset, &previous, &next, &save, &exportButton, &load }) addAndMakeVisible (b);
+    preset.onClick = [this] { showMenu(); }; previous.onClick = [this] { step (-1, previous.shiftClick); }; next.onClick = [this] { step (1, next.shiftClick); };
+    save.onClick = [this] { saveLibrary(); }; exportButton.onClick = [this] { exportFile(); }; load.onClick = [this] { importFile(); };
+    preset.setTooltip ("Factory and user presets. * means modified. Shift-click switches without saving; recover the previous state in Settings.");
+    previous.setTooltip (preset.getTooltip()); next.setTooltip (preset.getTooltip());
+    save.setTooltip ("Save a named preset to your user library.");
+    status.setFont (Theme::font (11)); refreshColours();
+    addAndMakeVisible (status); timerCallback(); startTimerHz (4);
+}
+void PresetBar::refreshColours()
+{
     save.setColour (juce::TextButton::buttonColourId, Theme::yellow());
     save.setColour (juce::TextButton::textColourOffId, Theme::black());
-    preset.onClick = [this] { showMenu(); }; previous.onClick = [this] { step (-1); }; next.onClick = [this] { step (1); };
-    save.onClick = [this] { saveLibrary(); }; exportButton.onClick = [this] { exportFile(); }; load.onClick = [this] { importFile(); };
-    preset.setTooltip ("Factory and user presets. * means modified.");
-    save.setTooltip ("Save a named preset to your user library.");
-    status.setFont (Theme::font (11)); status.setColour (juce::Label::textColourId, Theme::dim());
-    addAndMakeVisible (status); timerCallback(); startTimerHz (4);
+    status.setColour (juce::Label::textColourId, Theme::dim());
+    if (dialog) { dialog->sendLookAndFeelChange(); refreshEditorColours (*dialog); }
+    repaint();
 }
 PresetBar::~PresetBar()
 {
@@ -59,11 +66,14 @@ void PresetBar::showMenu()
     }
     menu.addSubMenu ("Factory", factory); menu.addSubMenu ("User library", user);
     const auto safe = juce::Component::SafePointer<PresetBar> (this);
+    const bool shiftAtOpen = preset.shiftClick;
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&preset),
-                       [safe] (int result) { if (safe && result > 0) safe->requestSelect (result - 1); });
+                       [safe, shiftAtOpen] (int result)
+                       { if (safe && result > 0) safe->requestSelect (result - 1, shiftAtOpen || juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown()); });
 }
-void PresetBar::requestSelect (int selected)
+void PresetBar::requestSelect (int selected, bool keepRecovery)
 {
+    if (keepRecovery) { select (selected, true); return; }
     if (! processor.isPresetDirty()) { select (selected); return; }
     dialog = std::make_unique<juce::AlertWindow> (promptText ("Unsaved preset"), promptText ("Save your changes before switching?"), juce::AlertWindow::NoIcon);
     dialog->setLookAndFeel (&getLookAndFeel());
@@ -81,14 +91,14 @@ void PresetBar::requestSelect (int selected)
         if (result == 2) juce::MessageManager::callAsync ([safe] { if (safe) safe->saveLibrary(); });
     }), false); // Owned by this component, never also auto-deleted by JUCE.
 }
-void PresetBar::select (int selected)
+void PresetBar::select (int selected, bool keepRecovery)
 {
     auto state = manager.loadPreset (selected);
-    if (! processor.applyPreset (state)) { setStatus ("Invalid preset"); return; }
-    index = selected; processor.setPresetName (manager.getEntry (index).name); processor.setPresetDirty (false);
+    if (! processor.switchPreset (state, manager.getEntry (selected).name, keepRecovery)) { setStatus ("Invalid preset"); return; }
+    index = selected;
     setStatus ("Preset loaded"); timerCallback();
 }
-void PresetBar::step (int direction)
+void PresetBar::step (int direction, bool keepRecovery)
 {
     manager.rescan();
     auto current = processor.getCurrentPresetName();
@@ -96,7 +106,7 @@ void PresetBar::step (int direction)
     index = -1;
     for (int i = 0; i < entries.size(); ++i) if (entries[i].name == current) { index = i; break; }
     if (entries.isEmpty()) return;
-    requestSelect ((index + direction + entries.size()) % entries.size());
+    requestSelect ((index + direction + entries.size()) % entries.size(), keepRecovery);
 }
 void PresetBar::saved (const juce::Result& result, const juce::String& name)
 {

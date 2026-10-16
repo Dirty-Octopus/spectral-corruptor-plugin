@@ -51,10 +51,12 @@ void FFTEngine::updateWindow()
 {
     window.resize ((size_t) fftSize);
     windowSum = 0.0f;
+    windowAmplitudeSum = 0.0;
     for (int n = 0; n < fftSize; ++n)
     {
         window[(size_t) n] = windowSample (windowType, n, fftSize);
         windowSum += window[(size_t) n] * window[(size_t) n];
+        windowAmplitudeSum += (double) window[(size_t) n];
     }
     // COLA normalization: reconstruction factor = windowSum / hop -> inverse = hop / windowSum.
     norm = (windowSum > 0.0f) ? (float) hopSize / windowSum : 1.0f;

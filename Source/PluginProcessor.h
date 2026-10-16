@@ -11,6 +11,8 @@
 #include "parameters/MacroMapping.h"
 #include "licensing/LicenseManager.h"
 #include "licensing/PinkNoise.h"
+#include "updates/HostRegistration.h"
+#include "updates/UpdateService.h"
 #include <atomic>
 #include <memory>
 #include <map>
@@ -55,10 +57,15 @@ public:
     void setModuleParameter (int channel, const juce::String& uid,
                              const juce::Identifier& key, const juce::var& value);
     bool applyPreset (const juce::ValueTree&);
+    // The single recovery slot belongs to this instance and only travels in host state.
+    bool switchPreset (const juce::ValueTree&, const juce::String& name, bool keepRecovery);
+    bool hasPresetRecovery() const;
+    juce::String getPresetRecoveryName() const;
+    bool restorePresetRecovery();
     bool undo();
     bool redo();
-    bool canUndo() const noexcept { return undoPosition > 0; }
-    bool canRedo() const noexcept { return undoPosition + 1 < undoHistory.size(); }
+    bool canUndo() const noexcept { const juce::ScopedLock lock (stateLock); return pendingUndoEdit.load() || undoPosition > 0; }
+    bool canRedo() const noexcept { const juce::ScopedLock lock (stateLock); return ! pendingUndoEdit.load() && undoPosition + 1 < undoHistory.size(); }
     juce::String getCurrentPresetName() const;
     bool isPresetDirty() const { return presetDirty.load(); }
     void setPresetName (const juce::String&);
@@ -68,6 +75,8 @@ public:
     int getDisplayLatency() const noexcept { return displayLatency.load(); }
     uint64_t getStructureRevision() const noexcept { return structureRevision.load(); }
     scrr::licensing::LicenseManager& getLicense() const noexcept { return *license; }
+    // Lazy UI-only access; the processor keeps the worker alive across editor closes.
+    std::shared_ptr<scrr::updates::UpdateService> getUpdateService();
     juce::String getMacroName (int index) const;
     juce::String getMacroLabel (int index) const;
     void setMacroName (int index, const juce::String& name);
@@ -82,12 +91,15 @@ public:
     std::vector<scrr::params::ModulationSource> getModulators() const;
     juce::String addModulator (bool envelope, bool random = false);
     void removeModulator (const juce::String&);
+    bool moveModulator (const juce::String& uid, int insertionIndex);
     void updateModulator (scrr::params::ModulationSource);
     void assignModulator (const juce::String& source, int channel, const juce::String& uid, const juce::Identifier& parameter);
     uint64_t getModulatorRevision() const noexcept { return modulatorRevision.load(); }
     float getModulatorPhase (int index) const noexcept { return modulationEngine.phase (index); }
 
 private:
+    scrr::updates::HostRegistration updateHostRegistration;
+    std::shared_ptr<scrr::updates::UpdateService> updateService;
     std::shared_ptr<scrr::licensing::LicenseManager> license;
     std::array<scrr::licensing::PinkNoise, 2> noise { scrr::licensing::PinkNoise (0x529423u), scrr::licensing::PinkNoise (0x735ab3u) };
     void renderUnlicensed (juce::AudioBuffer<float>&) noexcept;
@@ -107,6 +119,7 @@ private:
     mutable juce::CriticalSection stateLock;
     juce::ValueTree rackState { "RACK" };
     juce::String presetName { "Init" };
+    juce::ValueTree presetRecovery;
     std::atomic<bool> presetDirty { false }, restoring { false };
     std::atomic<uint64_t> structureRevision { 0 };
     std::vector<scrr::params::MacroMapping> macroMappings;
@@ -115,7 +128,8 @@ private:
     std::vector<juce::ValueTree> undoHistory;
     size_t undoPosition {};
     bool applyingUndoState {};
-    void recordUndoState();
+    std::atomic<bool> pendingUndoEdit {};
+    void recordUndoState (bool beginsEdit = true);
     std::array<std::atomic<float>*, 8> macroParameters {};
     double macroBase (const scrr::params::MacroMapping&) const;
     bool describeMacroTarget (scrr::params::MacroMapping&) const;

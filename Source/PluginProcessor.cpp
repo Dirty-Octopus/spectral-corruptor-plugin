@@ -69,18 +69,28 @@ SpectralCrrptProcessor::SpectralCrrptProcessor (std::shared_ptr<scrr::licensing:
     for (auto* p : getParameters())
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (p))
             apvts.addParameterListener (ranged->paramID, this);
+    recordUndoState (false);
 }
 
 SpectralCrrptProcessor::~SpectralCrrptProcessor()
 {
+    // Stop the last update worker while JUCE and its platform classes still live.
+    updateService.reset();
     for (auto* p : getParameters())
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (p))
             apvts.removeParameterListener (ranged->paramID, this);
 }
 
+std::shared_ptr<scrr::updates::UpdateService> SpectralCrrptProcessor::getUpdateService()
+{
+    const juce::ScopedLock lock (stateLock);
+    if (! updateService) updateService = scrr::updates::UpdateService::shared();
+    return updateService;
+}
+
 void SpectralCrrptProcessor::parameterChanged (const juce::String&, float)
 {
-    if (! restoring.load()) presetDirty.store (true);
+    if (! restoring.load()) { presetDirty.store (true); pendingUndoEdit.store (true); }
 }
 
 void SpectralCrrptProcessor::publishRack (bool structural)
@@ -98,7 +108,7 @@ void SpectralCrrptProcessor::publishRack (bool structural)
     if (structural) structureRevision.fetch_add (1);
 }
 
-void SpectralCrrptProcessor::recordUndoState()
+void SpectralCrrptProcessor::recordUndoState (bool beginsEdit)
 {
     if (applyingUndoState) return;
     auto state = copyPresetState();
@@ -107,19 +117,20 @@ void SpectralCrrptProcessor::recordUndoState()
         undoHistory.push_back (state);
         undoPosition = 0;
     }
-    else if (undoHistory[undoPosition] != state)
+    else if (! undoHistory[undoPosition].isEquivalentTo (state))
     {
         undoHistory.resize (undoPosition + 1);
         undoHistory.push_back (state);
         if (undoHistory.size() > 101) undoHistory.erase (undoHistory.begin());
         undoPosition = undoHistory.size() - 1;
     }
+    pendingUndoEdit.store (beginsEdit);
 }
 
 bool SpectralCrrptProcessor::undo()
 {
     const juce::ScopedLock lock (stateLock);
-    recordUndoState();
+    recordUndoState (false);
     if (undoPosition == 0) return false;
     --undoPosition;
     applyingUndoState = true;
@@ -131,7 +142,7 @@ bool SpectralCrrptProcessor::undo()
 bool SpectralCrrptProcessor::redo()
 {
     const juce::ScopedLock lock (stateLock);
-    recordUndoState();
+    recordUndoState (false);
     if (undoPosition + 1 >= undoHistory.size()) return false;
     ++undoPosition;
     applyingUndoState = true;
@@ -198,13 +209,13 @@ juce::String SpectralCrrptProcessor::transferModule (int source, const juce::Str
     auto from = rackState.getChildWithName (chainNames[source]), to = rackState.getChildWithName (chainNames[destination]);
     const auto original = from.getChildWithProperty ("uid", uid);
     if (! original.isValid() || ((source != destination || duplicate) && to.getNumChildren() >= maxModulesPerChain)) return {};
-    recordUndoState();
     std::vector<scrr::params::MacroMapping> copied;
     if (duplicate)
     {
         for (auto m : macroMappings) if (m.channel == source && m.uid == uid) copied.push_back (m);
         if (copied.size() + macroMappings.size() > 256) return {};
     }
+    recordUndoState();
     auto module = duplicate ? original.createCopy() : original;
     const auto nextUid = duplicate ? juce::Uuid().toString() : uid;
     if (duplicate) module.setProperty ("uid", nextUid, nullptr);
@@ -302,6 +313,7 @@ juce::ValueTree SpectralCrrptProcessor::copyPresetState()
 {
     const juce::ScopedLock lock (stateLock);
     auto result = apvts.copyState();
+    result.removeChild (result.getChildWithName ("presetRecovery"), nullptr);
     for (const auto& name : chainNames)
     {
         result.removeChild (result.getChildWithName (name), nullptr);
@@ -326,6 +338,44 @@ juce::ValueTree SpectralCrrptProcessor::copyPresetState()
     return result;
 }
 
+bool SpectralCrrptProcessor::switchPreset (const juce::ValueTree& preset, const juce::String& name, bool keepRecovery)
+{
+    const juce::ScopedLock lock (stateLock);
+    juce::ValueTree previous;
+    if (keepRecovery)
+    {
+        previous = copyPresetState();
+        previous.setProperty ("presetName", presetName, nullptr);
+        previous.setProperty ("presetDirty", presetDirty.load(), nullptr);
+    }
+    if (! applyPreset (preset)) return false;
+    if (keepRecovery) presetRecovery = previous;
+    presetName = name;
+    presetDirty.store (false);
+    return true;
+}
+
+bool SpectralCrrptProcessor::hasPresetRecovery() const
+{
+    const juce::ScopedLock lock (stateLock);
+    return presetRecovery.isValid();
+}
+
+juce::String SpectralCrrptProcessor::getPresetRecoveryName() const
+{
+    const juce::ScopedLock lock (stateLock);
+    return presetRecovery.getProperty ("presetName", "Init").toString();
+}
+
+bool SpectralCrrptProcessor::restorePresetRecovery()
+{
+    const juce::ScopedLock lock (stateLock);
+    if (! presetRecovery.isValid() || ! applyPreset (presetRecovery)) return false;
+    presetName = presetRecovery.getProperty ("presetName", "Init").toString();
+    presetDirty.store ((bool) presetRecovery.getProperty ("presetDirty", false));
+    return true;
+}
+
 bool SpectralCrrptProcessor::applyPreset (const juce::ValueTree& preset)
 {
     if (! preset.isValid() || (! preset.hasType ("PARAMS") && ! preset.getChildWithName ("modules").isValid()))
@@ -346,6 +396,9 @@ bool SpectralCrrptProcessor::applyPreset (const juce::ValueTree& preset)
                 auto module = cleanModule (child);
                 if (module.isValid() && dest.getNumChildren() < maxModulesPerChain)
                 {
+                    // History is our own validated state. Retain identities so
+                    // restored mappings and subsequent redo still match it.
+                    if (applyingUndoState) module.setProperty ("uid", child["uid"], nullptr);
                     const auto key = name.substring (2) + ":" + child["uid"].toString();
                     restoredIds.emplace (key, module["uid"].toString());
                     dest.appendChild (module, nullptr);
@@ -360,6 +413,7 @@ bool SpectralCrrptProcessor::applyPreset (const juce::ValueTree& preset)
         for (const auto& name : chainNames) globals.removeChild (globals.getChildWithName (name), nullptr);
         globals.removeProperty ("presetName", nullptr);
         globals.removeProperty ("presetDirty", nullptr);
+        globals.removeChild (globals.getChildWithName ("presetRecovery"), nullptr);
         globals.removeChild (globals.getChildWithName ("macroNames"), nullptr);
         globals.removeChild (globals.getChildWithName ("macroMappings"), nullptr);
         globals.removeChild (globals.getChildWithName ("modulators"), nullptr);
@@ -567,6 +621,12 @@ void SpectralCrrptProcessor::getStateInformation (juce::MemoryBlock& dest)
     auto state = copyPresetState();
     state.setProperty ("presetName", presetName, nullptr);
     state.setProperty ("presetDirty", presetDirty.load(), nullptr);
+    if (presetRecovery.isValid())
+    {
+        juce::ValueTree recovery ("presetRecovery");
+        recovery.appendChild (presetRecovery.createCopy(), nullptr);
+        state.appendChild (recovery, nullptr);
+    }
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -581,6 +641,10 @@ void SpectralCrrptProcessor::setStateInformation (const void* data, int bytes)
         {
             presetName = state.getProperty ("presetName", "Init").toString();
             presetDirty.store ((bool) state.getProperty ("presetDirty", false));
+            auto recovery = state.getChildWithName ("presetRecovery").getChild (0);
+            presetRecovery = recovery.hasType ("PARAMS") ? recovery.createCopy() : juce::ValueTree();
+            if (presetRecovery.isValid())
+                presetRecovery.removeChild (presetRecovery.getChildWithName ("presetRecovery"), nullptr);
         }
     }
 }

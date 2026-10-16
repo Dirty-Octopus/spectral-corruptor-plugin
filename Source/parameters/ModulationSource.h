@@ -100,7 +100,7 @@ struct ModulationSource
     {
         ModulationSource m; m.uid = tree["uid"].toString().substring (0, 64); m.envelope = tree["type"].toString() == "envelope";
         m.random = tree["type"].toString() == "random";
-        m.name = tree.getProperty ("name", m.envelope ? "Envelope" : m.random ? "Random" : "LFO").toString().substring (0, 32);
+        m.name = tree.getProperty ("name", m.envelope ? "Audio Follower" : m.random ? "Random" : "LFO").toString().substring (0, 32);
         m.enabled = (bool) tree.getProperty ("enabled", true); m.sync = (bool) tree["sync"]; m.retrigger = (bool) tree["retrigger"];
         const auto number = [&] (const char* key, float fallback, float low, float high)
         { const float v = (float) tree.getProperty (key, fallback); return std::isfinite (v) ? juce::jlimit (low, high, v) : fallback; };

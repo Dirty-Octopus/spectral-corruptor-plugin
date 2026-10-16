@@ -5,7 +5,7 @@ if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 project(SpectralCrrpt
-    VERSION 0.1.2
+    VERSION 0.2.0
     DESCRIPTION "Spectral Corruptor - FFT spectral corruption audio plugin"
     LANGUAGES C CXX)
 
@@ -67,6 +67,7 @@ target_sources(SpectralCrrpt PRIVATE
     Source/PluginProcessor.cpp
     Source/MacroRouting.cpp
     Source/PluginEditor.cpp
+    Source/updates/UpdateService.cpp
     Source/licensing/LicenseManager.cpp
     Source/StandaloneApp.cpp
     Source/parameters/ParameterLayout.cpp
@@ -107,6 +108,7 @@ target_include_directories(SpectralCrrpt PRIVATE
 
 target_compile_definitions(SpectralCrrpt PUBLIC
     JUCE_WEB_BROWSER=0
+    SCR_SOURCE_EDITION=1
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
@@ -121,6 +123,7 @@ endif()
 target_link_libraries(SpectralCrrpt PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
+    juce::juce_cryptography
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags

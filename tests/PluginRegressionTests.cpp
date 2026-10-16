@@ -59,8 +59,10 @@ void setParam (SpectralCrrptProcessor& p, const juce::String& id, float actual)
 bool samePixels (const juce::Image& a, const juce::Image& b)
 {
     if (a.getBounds() != b.getBounds()) return false;
+    if (a.isNull()) return true;
+    const juce::Image::BitmapData pixelsA (a, juce::Image::BitmapData::readOnly), pixelsB (b, juce::Image::BitmapData::readOnly);
     for (int y = 0; y < a.getHeight(); ++y) for (int x = 0; x < a.getWidth(); ++x)
-        if (a.getPixelAt (x, y) != b.getPixelAt (x, y)) return false;
+        if (pixelsA.getPixelColour (x, y) != pixelsB.getPixelColour (x, y)) return false;
     return true;
 }
 }
@@ -380,13 +382,17 @@ TEST_CASE ("Chain drag reorders, cancels outside targets and removes only at the
     row = findID (*editor, "stage-" + firstUid); REQUIRE (row != nullptr);
     row->mouseDown (mouse (*row, { 20, 20 })); row->mouseDrag (mouse (*row, { -400, -500 }, true)); row->mouseUp (mouse (*row, { -400, -500 }, true)); pump (50);
     REQUIRE (p.getModuleChain (1).getNumChildren() == 3);
-    row = findID (*editor, "stage-" + firstUid);
+    row = findID (*editor, "stage-" + firstUid); REQUIRE (row != nullptr);
     // Drop in the centre of the detail panel below the macro row.
-    const auto target = row->getLocalPoint (content, juce::Point<int> (820, 642)).toFloat();
+    auto target = row->getLocalPoint (content, juce::Point<int> (820, 642)).toFloat();
     row->mouseDown (mouse (*row, { 20, 20 })); row->mouseDrag (mouse (*row, target, true));
     content->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
     row->mouseDrag (mouse (*row, target, true)); row->mouseUp (mouse (*row, target, true)); pump (60);
     REQUIRE (p.getModuleChain (1).getNumChildren() == 3);
+    // Cancel restores the inspector asynchronously and retires the mouse sender
+    // after mouseUp. A new real gesture hit-tests the newly built visible row.
+    row = findID (*editor, "stage-" + firstUid); REQUIRE (row != nullptr);
+    target = row->getLocalPoint (content, juce::Point<int> (820, 642)).toFloat();
     row->mouseDown (mouse (*row, { 20, 20 })); row->mouseDrag (mouse (*row, target, true));
     row->mouseUp (mouse (*row, target, true)); pump (70);
     REQUIRE (p.getModuleChain (1).getNumChildren() == 2);
@@ -1196,17 +1202,21 @@ TEST_CASE ("Native modulation page adds sources, edits curves, toggles channels 
     setParam (*p, scrr::params::id::fftSize, 2);
     REQUIRE (waitForUI ([&] { return fftChoice->getText() == "4096 / L"; }));
     REQUIRE (fftChoice->getSelectedId() == 1); REQUIRE (fftChoice->getText() == "4096 / L");
-    findButton (*editor, "MODULATION")->triggerClick(); pump();
-    auto* page = findID (*editor, "modulation-page"); REQUIRE (page && page->isVisible());
-    findButton (*page, "+ LFO")->triggerClick(); pump(); findButton (*page, "+ ENVELOPE")->triggerClick(); pump();
+    auto* page = findID (*editor, "modulation-page"); REQUIRE (page != nullptr);
+    findButton (*editor, "MODULATION")->triggerClick(); REQUIRE (waitForUI ([&] { return page->isVisible(); }));
+    findButton (*page, "+ LFO")->triggerClick(); REQUIRE (waitForUI ([&] { return p->getModulators().size() == 1; }));
+    findButton (*page, "+ AUDIO FOLLOWER")->triggerClick(); REQUIRE (waitForUI ([&] { return p->getModulators().size() == 2; }));
     REQUIRE (p->getModulators().size() == 2);
-    findButton (*page, "+ RANDOM")->triggerClick(); pump(); REQUIRE (p->getModulators().size() == 3); REQUIRE (p->getModulators()[2].random);
-    const auto source = p->getModulators()[0]; auto* card = findID (*page, "modulator-" + source.uid); REQUIRE (card);
+    findButton (*page, "+ RANDOM")->triggerClick(); REQUIRE (waitForUI ([&] { return p->getModulators().size() == 3; })); REQUIRE (p->getModulators()[2].random);
+    const auto source = p->getModulators()[0];
+    dynamic_cast<scrr::gui::ModulationPage*> (page)->selectSource (source.uid);
+    auto* card = findID (*page, "modulator-" + source.uid); REQUIRE (card);
     scrr::gui::ModulationCurve* curve {};
     for (auto* child : card->getChildren()) if (auto* c = dynamic_cast<scrr::gui::ModulationCurve*> (child)) curve = c;
     REQUIRE (curve); curve->mouseDoubleClick (mouse (*curve, { (float) curve->getWidth() * .4f, (float) curve->getHeight() - 6 }));
     REQUIRE (p->getModulators()[0].shape == 5); REQUIRE (p->getModulators()[0].points.size() >= 9);
-    findButton (*page, "EFFECTS >")->triggerClick(); pump(); REQUIRE (! page->isVisible());
+    auto* returnToEffects = findButton (*page, "EFFECTS >"); REQUIRE (returnToEffects && returnToEffects->isShowing() && returnToEffects->isEnabled());
+    returnToEffects->triggerClick(); REQUIRE (waitForUI ([&] { return ! page->isVisible(); }));
     auto* dot = findID (*editor, "channel-2"); dot->mouseDown (mouse (*dot, { 10, 15 })); dot->mouseUp (mouse (*dot, { 10, 15 }));
     REQUIRE (p->getAPVTS().getRawParameterValue (scrr::params::id::channelEnabled[1])->load() < .5f);
     auto* row = findID (*editor, "stage-" + uid); REQUIRE (row);
@@ -1217,7 +1227,8 @@ TEST_CASE ("Native modulation page adds sources, edits curves, toggles channels 
     const int modifier = juce::ModifierKeys::ctrlModifier;
    #endif
     const int mods = modifier | juce::ModifierKeys::leftButtonModifier;
-    row->mouseDown (mouse (*row, { 40, 20 }, false, mods)); row->mouseDrag (mouse (*row, point, true, mods)); row->mouseUp (mouse (*row, point, true, mods)); pump (320);
+    row->mouseDown (mouse (*row, { 40, 20 }, false, mods)); row->mouseDrag (mouse (*row, point, true, mods)); row->mouseUp (mouse (*row, point, true, mods));
+    REQUIRE (waitForUI ([&] { return p->getModuleChain (2).getNumChildren() == 1; }));
     REQUIRE (p->getModuleChain (1).getNumChildren() == 1); REQUIRE (p->getModuleChain (2).getNumChildren() == 1);
     REQUIRE (p->getModuleChain (2).getChild (0)["uid"].toString() != uid);
     editor.reset(); pump (100);
@@ -1267,17 +1278,20 @@ TEST_CASE ("Prompt languages persist separately and localize activation and dial
     if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr)
     {
         auto p = testProcessor(); auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor());
-        editor->addToDesktop (0); editor->setVisible (true); pump (80);
+        editor->addToDesktop (0); editor->setVisible (true); editor->toFront (true); pump (80);
         REQUIRE (findButton (*editor, "MODULATION") != nullptr);
         auto* button = dynamic_cast<juce::Button*> (findID (*editor, "settings-button")); REQUIRE (button != nullptr);
-        button->triggerClick(); pump (40); REQUIRE (findID (*editor, "settings-panel")->isVisible());
-        findButton (*findID (*editor, "settings-panel"), juce::String::fromUTF8 (u8"关闭  x"))->triggerClick(); pump (40);
-        REQUIRE (! findID (*editor, "settings-panel")->isVisible());
-        findButton (*editor, "SAVE")->triggerClick(); pump (40);
-        auto* dialog = dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent()); REQUIRE (dialog != nullptr);
+        auto* settingsPage = findID (*editor, "settings-panel"); REQUIRE (settingsPage != nullptr);
+        button->triggerClick(); REQUIRE (waitForUI ([&] { return settingsPage->isVisible(); }));
+        auto* closeSettings = findButton (*settingsPage, juce::String::fromUTF8 (u8"关闭  x")); REQUIRE (closeSettings && closeSettings->isShowing() && closeSettings->isEnabled());
+        closeSettings->triggerClick(); REQUIRE (waitForUI ([&] { return ! settingsPage->isVisible(); }));
+        findButton (*editor, "SAVE")->triggerClick();
+        juce::Component::SafePointer<juce::AlertWindow> dialog (dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent()));
+        if (! dialog) REQUIRE (waitForUI ([&] { dialog = dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent()); return dialog != nullptr; }));
+        REQUIRE (dialog != nullptr);
         REQUIRE (dialog->getName() == juce::String::fromUTF8 (u8"保存预设"));
-        findButton (*dialog, juce::String::fromUTF8 (u8"取消"))->triggerClick(); pump (60);
-        REQUIRE (juce::Component::getNumCurrentlyModalComponents() == 0);
+        findButton (*dialog, juce::String::fromUTF8 (u8"取消"))->triggerClick();
+        REQUIRE (waitForUI ([] { return juce::Component::getNumCurrentlyModalComponents() == 0; }));
         const auto before = p->copyPresetState().toXmlString();
         Lang::set (Lang::Language::english, false);
         REQUIRE (waitForUI ([&] { return findButton (*findID (*editor, "license-panel"), "ACTIVATE") != nullptr; }));
@@ -1519,13 +1533,15 @@ TEST_CASE ("Signal chain context menu follows a displaced editor instead of the 
     auto p = testProcessor(); p->addModule (1, "SpectralFilter"); const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString();
     auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor()); editor->setSize (1040, 780);
     editor->addToDesktop (0); editor->setTopLeftPosition (display->userArea.getPosition() + juce::Point<int> (140, 60));
-    editor->setVisible (true); pump (350);
+    editor->setVisible (true); editor->toFront (true); pump (350);
     auto* row = findID (*editor, "stage-" + uid); REQUIRE (row != nullptr);
     const juce::Point<float> click { 70, 20 }; const auto anchor = row->localPointToGlobal (click.toInt());
     row->mouseDown (mouse (*row, click, false, juce::ModifierKeys::rightButtonModifier));
-    REQUIRE (waitForUI ([] { return juce::Component::getCurrentlyModalComponent() != nullptr; }));
-    auto* menu = juce::Component::getCurrentlyModalComponent();
-    REQUIRE (editor->isParentOf (menu));
+    // JUCE normally creates this menu synchronously. Observe its anchor before
+    // dispatching unrelated native focus events that may legitimately dismiss it.
+    juce::Component::SafePointer<juce::Component> menu (juce::Component::getCurrentlyModalComponent());
+    if (! menu) REQUIRE (waitForUI ([&] { menu = juce::Component::getCurrentlyModalComponent(); return menu != nullptr; }));
+    REQUIRE (menu != nullptr); REQUIRE (editor->isParentOf (menu.getComponent()));
     const auto bounds = menu->getScreenBounds();
     REQUIRE (std::abs (bounds.getX() - anchor.x) < 32);
     // JUCE flips upwards when the runner's work area has too little room below.
@@ -1668,19 +1684,24 @@ TEST_CASE ("Modulation card right-click assigns and removes macros using the exi
 {
     auto p = testProcessor(); const auto uid = p->addModulator (false, true);
     auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor());
-    editor->setSize (1040, 780); editor->addToDesktop (0); editor->setVisible (true);
+    editor->setSize (1040, 780); editor->addToDesktop (0); editor->setVisible (true); editor->toFront (true);
     findButton (*editor, "MODULATION")->triggerClick(); pump (100);
     auto* card = findID (*editor, "modulator-" + uid); REQUIRE (card != nullptr);
     auto* slider = dynamic_cast<scrr::gui::AssignableSlider*> (findID (*card, "random-smooth")); REQUIRE (slider != nullptr);
+    const auto chooseFirstMapping = [&]
+    {
+        // Observe JUCE's synchronous popup before pumping native focus changes.
+        juce::Component::SafePointer<juce::Component> menu (juce::Component::getCurrentlyModalComponent());
+        if (! menu) REQUIRE (waitForUI ([&] { menu = juce::Component::getCurrentlyModalComponent(); return menu != nullptr; }));
+        REQUIRE (menu != nullptr); menu->exitModalState (1);
+    };
     slider->mouseDown (mouse (*slider, { 20, 12 }, false, juce::ModifierKeys::rightButtonModifier));
-    REQUIRE (waitForUI ([] { return juce::Component::getCurrentlyModalComponent() != nullptr; }));
-    juce::Component::getCurrentlyModalComponent()->exitModalState (1);
+    chooseFirstMapping();
     REQUIRE (waitForUI ([&] { return p->getMacroMappings().size() == 1 && slider->modulationHeight() == 15; }));
     REQUIRE (p->getMacroMappings()[0].parameter == juce::Identifier ("smooth"));
     slider->setValue (125, juce::sendNotificationSync); REQUIRE (std::abs (p->getModulators()[0].smooth - 125) < .0001);
     slider->mouseDown (mouse (*slider, { 20, 20 }, false, juce::ModifierKeys::rightButtonModifier));
-    REQUIRE (waitForUI ([] { return juce::Component::getCurrentlyModalComponent() != nullptr; }));
-    juce::Component::getCurrentlyModalComponent()->exitModalState (1);
+    chooseFirstMapping();
     REQUIRE (waitForUI ([&] { return p->getMacroMappings().empty(); }));
     juce::PopupMenu::dismissAllActiveMenus();
 }
@@ -1770,10 +1791,23 @@ TEST_CASE ("Notes is a single editable Markdown area with preview, independent o
     REQUIRE (p->getModuleChain (1).getChild (0)["notes"].toString().length() == 65536);
 }
 
+#include "PresetRecoveryTests.h"
+#include "ModulationUxTests.h"
+#include "SettingsUpdateTests.h"
+#include "EffectArtworkMotionTests.h"
+
 int main (int argc, char** argv)
 {
+    scrr::updates::UpdateService::testing = true;
+    const auto preferences = juce::File::getSpecialLocation (juce::File::tempDirectory)
+        .getNonexistentChildFile ("SpectralCorruptor-regression-ui", "");
+    if (preferences.createDirectory().failed() || ! preferences.getChildFile ("guide.txt").replaceWithText ("hidden")) return 1;
+    struct PreferenceCleanup { juce::File directory; ~PreferenceCleanup() { directory.deleteRecursively(); } } preferenceCleanup { preferences };
+    scrr::gui::PromptLanguage::testPreferenceDirectory = preferences;
     juce::ScopedJuceInitialiser_GUI gui;
     scrr::gui::PromptLanguage::set (scrr::gui::PromptLanguage::Language::english, false);
+    if (argc > 2 && juce::String (argv[1]) == "--render-v020") return renderV020Ui (juce::File (argv[2]));
+    if (argc > 2 && juce::String (argv[1]) == "--render-effect-motion") return renderEffectMotion (juce::File (argv[2]));
     if (argc > 2 && juce::String (argv[1]) == "--validate-vst3")
     {
         juce::AudioPluginFormatManager formats; formats.addDefaultFormats();

@@ -3,22 +3,23 @@
 
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "ThemeProfiles.h"
 #include <cmath>
 #include <vector>
 
 namespace scrr::gui {
 struct Theme
 {
-    static juce::Colour black() { return juce::Colour (0xff101010); }
-    static juce::Colour panel() { return juce::Colour (0xff202020); }
-    static juce::Colour field() { return juce::Colour (0xff080808); }
-    static juce::Colour line() { return juce::Colour (0xff575757); }
-    static juce::Colour white() { return juce::Colour (0xfff6f6ef); }
-    static juce::Colour dim() { return juce::Colour (0xffb8b8b0); }
-    static juce::Colour inactive() { return juce::Colour (0xff979797); }
-    static juce::Colour red() { return juce::Colour (0xffff392b); }
-    static juce::Colour yellow() { return juce::Colour (0xffffdf00); }
-    static juce::Colour blue() { return juce::Colour (0xff164cff); }
+    static juce::Colour black() { return ThemeProfiles::get().colour (0); }
+    static juce::Colour panel() { return ThemeProfiles::get().colour (1); }
+    static juce::Colour field() { return ThemeProfiles::get().colour (2); }
+    static juce::Colour line() { return ThemeProfiles::get().colour (3); }
+    static juce::Colour white() { return ThemeProfiles::get().colour (4); }
+    static juce::Colour dim() { return ThemeProfiles::get().colour (5); }
+    static juce::Colour inactive() { return ThemeProfiles::get().colour (6); }
+    static juce::Colour red() { return ThemeProfiles::get().colour (7); }
+    static juce::Colour yellow() { return ThemeProfiles::get().colour (8); }
+    static juce::Colour blue() { return ThemeProfiles::get().colour (9); }
     static juce::Colour channelColour (int channel)
     { return channel % 4 == 0 ? red() : channel % 4 == 1 ? yellow() : channel % 4 == 2 ? blue() : white(); }
     static juce::Font displayFont (float size)
@@ -34,7 +35,8 @@ struct Theme
 class InstrumentLookAndFeel : public juce::LookAndFeel_V4, private juce::Timer
 {
 public:
-    InstrumentLookAndFeel()
+    InstrumentLookAndFeel() { refreshColours(); }
+    void refreshColours()
     {
         setColour (juce::Slider::thumbColourId, Theme::yellow());
         setColour (juce::Slider::trackColourId, Theme::yellow());
@@ -195,14 +197,33 @@ inline void setupParameterGestures (juce::Slider& slider)
     slider.setVelocityModeParameters (1.0, 1, 0.0, true, juce::ModifierKeys::altModifier);
     slider.setDoubleClickReturnValue (slider.isDoubleClickReturnEnabled(), slider.getDoubleClickReturnValue(), resetModifier());
 }
-inline void setupSlider (juce::Slider& slider, double min, double max, double step, double def)
+inline void refreshSliderColours (juce::Slider& slider)
 {
-    slider.setSliderStyle (juce::Slider::LinearHorizontal);
-    slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 78, 24);
     slider.setColour (juce::Slider::textBoxTextColourId, Theme::white());
     slider.setColour (juce::Slider::textBoxBackgroundColourId, Theme::field());
     slider.setColour (juce::Slider::textBoxOutlineColourId, Theme::line());
     slider.setColour (juce::Slider::thumbColourId, Theme::white());
+}
+// TextEditor stores the colour of existing text separately from its LookAndFeel.
+// Restore explicit roles rather than inferring them from possibly identical RGBs.
+inline void refreshEditorColours (juce::Component& component)
+{
+    if (auto* slider = dynamic_cast<juce::Slider*> (&component))
+        if ((bool) slider->getProperties()["scrThemeParameterSlider"]) refreshSliderColours (*slider);
+    if (auto* editor = dynamic_cast<juce::TextEditor*> (&component))
+    {
+        editor->applyColourToAllText (Theme::white());
+        editor->setTextToShowWhenEmpty (editor->getTextToShowWhenEmpty(), Theme::dim());
+    }
+    for (int i = 0; i < component.getNumChildComponents(); ++i)
+        refreshEditorColours (*component.getChildComponent (i));
+}
+inline void setupSlider (juce::Slider& slider, double min, double max, double step, double def)
+{
+    slider.setSliderStyle (juce::Slider::LinearHorizontal);
+    slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 78, 24);
+    slider.getProperties().set ("scrThemeParameterSlider", true);
+    refreshSliderColours (slider);
     slider.setRange (min, max, step);
     slider.setDoubleClickReturnValue (true, def, resetModifier());
     setupParameterGestures (slider);

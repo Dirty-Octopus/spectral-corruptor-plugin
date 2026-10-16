@@ -21,6 +21,7 @@ public:
     void setRange (float low, float high, bool active = true)
     { lowHz = low; highHz = high; rangeColour = active ? Theme::yellow() : Theme::inactive(); repaint(); }
     void setPaused (bool value) { paused = value; repaint(); }
+    void refreshColours();
 private:
     void timerCallback() override;
     void updateChannelBands();
@@ -38,6 +39,7 @@ private:
     double bandHostRate {}, bandFftRate {};
     int bandSlices {}, bandBins {};
     float bandCrossfade { -1 };
+    uint64_t bandThemeRevision { ~uint64_t{} };
     juce::Rectangle<int> plot;
 };
 } // namespace scrr::gui

@@ -233,6 +233,132 @@ TEST_CASE ("Contrast changes relative spectral dynamics without creating energy 
     for (auto bin : bins) REQUIRE (std::abs (bin) < 1e-9f);
 }
 
+TEST_CASE ("Spectral Clipper calibrates its bin ceiling across FFT sizes and windows")
+{
+    using namespace scrr::dsp;
+    for (int size : { 128, 512, 2048, 8192 })
+        for (auto window : { WindowType::Hann, WindowType::Hamming, WindowType::Blackman, WindowType::Rectangular })
+        {
+            FFTEngine fft; fft.configure (size, size / 4, window); fft.prepare (48000, size, 1);
+            SpectralClipper clipper; clipper.prepare (48000, fft.getNumBins());
+            clipper.setSpectrumCalibration (fft.getWindowAmplitudeSum());
+            auto state = createDefaultModuleState ("SpectralClipper");
+            state.setProperty ("enabled", true, nullptr); state.setProperty ("threshold", -12.0, nullptr);
+            clipper.updateParameters (state);
+            std::vector<float> input ((size_t) size * 3), output (input.size());
+            for (size_t i = 0; i < input.size(); ++i)
+                input[i] = .8f * (float) std::sin (juce::MathConstants<double>::twoPi * 5 * (double) i / size);
+            int frames = 0;
+            auto process = [&] (std::complex<float>* spectrum, int bins, float)
+            {
+                const auto original = spectrum[5];
+                const double inputAmplitude = 2 * std::abs (original) / fft.getWindowAmplitudeSum();
+                CHECK (std::abs (inputAmplitude - .8) < .002);
+                clipper.processSpectrum (spectrum, bins, 48000);
+                const double outputAmplitude = 2 * std::abs (spectrum[5]) / fft.getWindowAmplitudeSum();
+                CHECK (std::abs (outputAmplitude - std::pow (10.0, -12.0 / 20)) < .00001);
+                CHECK (std::abs (std::arg (spectrum[5] / original)) < .000001f);
+                ++frames;
+            };
+            for (int block = 0; block < 3; ++block)
+                fft.process (input.data() + block * size, output.data() + block * size, size, 0, process);
+            REQUIRE (frames > 1);
+        }
+}
+
+TEST_CASE ("Spectral Clipper handles endpoint bins drive soft knee and output independently")
+{
+    using namespace scrr::dsp;
+    SpectralClipper clipper; clipper.prepare (48000, 513); clipper.setSpectrumCalibration (512);
+    auto state = createDefaultModuleState ("SpectralClipper"); state.setProperty ("enabled", true, nullptr);
+    state.setProperty ("threshold", -12.0, nullptr); state.setProperty ("drive", 6.0, nullptr);
+    state.setProperty ("output", -3.0, nullptr); clipper.updateParameters (state);
+    std::vector<std::complex<float>> spectrum (513);
+    spectrum[0] = { 512, 0 }; spectrum[512] = { -512, 0 }; spectrum[17] = std::polar (256.0f, .7f);
+    spectrum[31] = std::polar (2.56f, -.6f);
+    clipper.processSpectrum (spectrum.data(), 513, 48000);
+    const double ceiling = std::pow (10.0, -15.0 / 20);
+    CHECK (std::abs (std::abs (spectrum[0]) / 512.0 - ceiling) < .000001);
+    CHECK (std::abs (std::abs (spectrum[512]) / 512.0 - ceiling) < .000001);
+    CHECK (spectrum[512].real() < 0);
+    CHECK (std::abs (std::abs (spectrum[17]) / 256.0 - ceiling) < .000001);
+    CHECK (std::abs (std::arg (spectrum[17]) - .7f) < .000001f);
+    CHECK (std::abs (std::abs (spectrum[31]) / 256.0 - .01 * std::pow (10.0, 3.0 / 20)) < .000001);
+    CHECK (spectrum[99] == std::complex<float>());
+    state.setProperty ("drive", 0.0, nullptr); state.setProperty ("output", 0.0, nullptr);
+    state.setProperty ("knee", 12.0, nullptr); clipper.updateParameters (state);
+    double previous = 0;
+    for (int level = -30; level <= 12; ++level)
+    {
+        const float amplitude = (float) std::pow (10.0, (double) level / 20);
+        spectrum[17] = { amplitude * 256, 0 }; clipper.processSpectrum (spectrum.data(), 513, 48000);
+        const double result = std::abs (spectrum[17]) / 256.0;
+        CHECK (result + .000001 >= previous); CHECK (result <= std::pow (10.0, -12.0 / 20) + .000001);
+        if (level <= -18) CHECK (std::abs (result - amplitude) < .000001);
+        previous = result;
+    }
+}
+
+TEST_CASE ("Spectral Equalizer centre gain phase and inverse bands have the expected response")
+{
+    using namespace scrr::dsp;
+    auto state = createDefaultModuleState ("SpectralEqualizer"); state.setProperty ("enabled", true, nullptr);
+    SpectralEqualizer eq; eq.prepare (48000, 1025); eq.updateParameters (state);
+    const auto value = std::polar (1.0f, .83f);
+    std::vector<std::complex<float>> spectrum (1025, value);
+    eq.processSpectrum (spectrum.data(), 1025, 48000);
+    for (auto bin : spectrum) CHECK (bin == value);
+    state.setProperty ("band1Freq", 937.5, nullptr); state.setProperty ("band1Gain", 12.0, nullptr);
+    state.setProperty ("band1Q", 2.0, nullptr); eq.updateParameters (state);
+    eq.processSpectrum (spectrum.data(), 1025, 48000);
+    CHECK (std::abs (std::abs (spectrum[40]) - std::pow (10.0, 12.0 / 20)) < .00001);
+    CHECK (std::abs (std::arg (spectrum[40]) - .83f) < .000001f);
+    CHECK (std::abs (std::abs (spectrum[0]) - 1) < .00001);
+    CHECK (std::abs (std::abs (spectrum[1024]) - 1) < .00001);
+    state.setProperty ("band2Freq", 937.5, nullptr); state.setProperty ("band2Gain", -12.0, nullptr);
+    state.setProperty ("band2Q", 2.0, nullptr); eq.updateParameters (state);
+    std::fill (spectrum.begin(), spectrum.end(), value); eq.processSpectrum (spectrum.data(), 1025, 48000);
+    for (auto bin : spectrum) CHECK (std::abs (bin - value) < .00001f);
+}
+
+TEST_CASE ("Spectral Equalizer shelves cuts and extreme settings stay finite at every supported rate")
+{
+    using namespace scrr::dsp;
+    auto state = createDefaultModuleState ("SpectralEqualizer");
+    state.setProperty ("band1Freq", 1000.0, nullptr); state.setProperty ("band1Gain", 12.0, nullptr);
+    SpectralEqResponse response;
+    state.setProperty ("band1Type", (int) SpectralEqBand::LowShelf, nullptr);
+    response.configure (readSpectralEqBands (state), 48000);
+    CHECK (std::abs (response.decibelsAt (0) - 12) < .00001);
+    CHECK (std::abs (response.decibelsAt (24000)) < .00001);
+    state.setProperty ("band1Type", (int) SpectralEqBand::HighShelf, nullptr);
+    response.configure (readSpectralEqBands (state), 48000);
+    CHECK (std::abs (response.decibelsAt (0)) < .00001);
+    CHECK (std::abs (response.decibelsAt (24000) - 12) < .00001);
+    for (int type : { (int) SpectralEqBand::LowCut, (int) SpectralEqBand::HighCut })
+    {
+        state.setProperty ("band1Type", type, nullptr); response.configure (readSpectralEqBands (state), 48000);
+        CHECK (std::abs (response.decibelsAt (1000) + 3.0103) < .0001);
+        CHECK (response.gainAt (type == SpectralEqBand::LowCut ? 0 : 24000) < .000001);
+    }
+    for (double rate : { 22050.0, 44100.0, 48000.0, 96000.0, 192000.0 })
+        for (int type = 0; type <= 4; ++type)
+            for (double q : { .1, 18.0 })
+                for (double frequency : { 20.0, 20000.0 })
+                {
+                    for (int i = 0; i < spectralEqBands; ++i)
+                    {
+                        state.setProperty (spectralEqParameter (i, "Type"), type, nullptr);
+                        state.setProperty (spectralEqParameter (i, "Freq"), frequency, nullptr);
+                        state.setProperty (spectralEqParameter (i, "Gain"), 24.0, nullptr);
+                        state.setProperty (spectralEqParameter (i, "Q"), q, nullptr);
+                    }
+                    response.configure (readSpectralEqBands (state), rate);
+                    for (int bin = 0; bin <= 256; ++bin)
+                    { const double gain = response.gainAt (rate * .5 * bin / 256); CHECK (std::isfinite (gain)); CHECK (gain >= 0); CHECK (gain <= 63096); }
+                }
+}
+
 TEST_CASE ("Frequency Shift translates an isolated bin by the requested Hz")
 {
     scrr::dsp::FrequencyShift fx; fx.prepare (48000, 1025);

@@ -36,7 +36,10 @@ void SpectralProcessor::prepare (const juce::dsp::ProcessSpec& spec)
     for (auto& chain : chains)
         for (auto& slot : chain)
             if (slot.module)
+            {
                 slot.module->prepare (sampleRate * oversampleFactor, bins);
+                slot.module->setSpectrumCalibration (fft.getWindowAmplitudeSum());
+            }
 
     for (auto& buf : channelBuffers)
         buf.assign ((size_t) bins, std::complex<float> { 0.0f, 0.0f });
@@ -81,7 +84,10 @@ void SpectralProcessor::applyPendingReconfigure()
     for (auto& chain : chains)
         for (auto& slot : chain)
             if (slot.module)
+            {
                 slot.module->prepare (sampleRate * oversampleFactor, bins);
+                slot.module->setSpectrumCalibration (fft.getWindowAmplitudeSum());
+            }
 
     for (auto& buf : channelBuffers)
         buf.assign ((size_t) bins, std::complex<float> { 0.0f, 0.0f });
@@ -190,6 +196,7 @@ void SpectralProcessor::rebuildChain (int channel, const juce::ValueTree& chainS
         {
             const int bins = fft.getNumBins();
             slot.module->prepare (sampleRate * oversampleFactor, bins);
+            slot.module->setSpectrumCalibration (fft.getWindowAmplitudeSum());
         }
 
         slots.push_back (std::move (slot));

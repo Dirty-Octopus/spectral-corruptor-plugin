@@ -53,6 +53,7 @@ public:
     int  getFFTSize() const noexcept { return fftSize; }
     int  getHopSize() const noexcept { return hopSize; }
     int  getNumBins() const noexcept { return fftSize / 2 + 1; }
+    double getWindowAmplitudeSum() const noexcept { return windowAmplitudeSum; }
 
     /** Copy the most recently analysed magnitude spectrum (linear) into `out`.
         Returns true if a new snapshot was available since the last call; false
@@ -89,6 +90,7 @@ private:
 
     std::vector<float>               window;
     float                            windowSum { 1.0f }; // sum of window^2
+    double                           windowAmplitudeSum { 1.0 }; // coherent amplitude calibration
     float                            norm      { 1.0f };  // hop / windowSum
 
     std::vector<float>               fftReal;

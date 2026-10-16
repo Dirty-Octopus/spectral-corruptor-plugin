@@ -256,10 +256,27 @@ juce::String SpectralCrrptProcessor::addModulator (bool envelope, bool random)
     if (source.random) source.seed = juce::Random::getSystemRandom().nextInt (1000000);
     for (int number = 1;; ++number)
     {
-        source.name = (envelope ? "ENV " : source.random ? "RND " : "LFO ") + juce::String (number);
+        source.name = (envelope ? "AF " : source.random ? "RND " : "LFO ") + juce::String (number);
         if (std::none_of (modulators.begin(), modulators.end(), [&] (const auto& m) { return m.name == source.name; })) break;
     }
     modulators.push_back (source); modulatorRevision.fetch_add (1); presetDirty.store (true); publishRack (false); return source.uid;
+}
+bool SpectralCrrptProcessor::moveModulator (const juce::String& uid, int insertionIndex)
+{
+    const juce::ScopedLock lock (stateLock);
+    const auto found = std::find_if (modulators.begin(), modulators.end(), [&] (const auto& source) { return source.uid == uid; });
+    if (found == modulators.end()) return false;
+    const int from = (int) std::distance (modulators.begin(), found);
+    int to = juce::jlimit (0, (int) modulators.size(), insertionIndex);
+    if (to > from) --to;
+    if (to == from) return false;
+    recordUndoState();
+    auto source = std::move (*found); modulators.erase (found);
+    modulators.insert (modulators.begin() + to, std::move (source));
+    // publishRack resolves source indices again from stable UIDs. Reordering is
+    // management only: each independent source retains its runtime phase/history.
+    modulatorRevision.fetch_add (1); presetDirty.store (true); publishRack (false);
+    return true;
 }
 void SpectralCrrptProcessor::removeModulator (const juce::String& uid)
 {

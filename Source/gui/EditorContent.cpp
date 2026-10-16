@@ -11,10 +11,28 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     : processor (p), presets (p), licensePanel (p.getLicense()), settingsPanel (PromptLanguage::preferenceFile(), &p.getAPVTS()), macroBar (p), macroPanel (p), modulationPage (p), inputSpectrum (p, true), outputSpectrum (p, false)
 {
     setLookAndFeel (&look); setOpaque (true);
+    updates = processor.getUpdateService(); settingsPanel.setUpdateService (updates);
+    settingsPanel.hasRecovery = [this] { return processor.hasPresetRecovery(); };
+    settingsPanel.restoreRecovery = [this] { if (processor.restorePresetRecovery()) { rebuildRack(); settingsPanel.tick(); } };
+    settingsPanel.openGuide = [this] { settingsPanel.setVisible (false); quickGuide.open(); };
+    addChildComponent (quickGuide); addChildComponent (updateNotice);
+    updateNotice.setComponentID ("update-available");
+    updateNotice.onClick = [this] { settingsPanel.showPage (2); settingsPanel.setVisible (true); settingsPanel.toFront (true); };
+    inspector.addChildComponent (eqEditor);
+    eqEditor.onParameterChange = [this] (const juce::String& key, const juce::var& value)
+    {
+        if (! eqEditor.isVisible() || eqEditor.getModuleUid() != selectedUid) return;
+        const auto current = processor.getModuleChain (channel).getChildWithProperty ("uid", selectedUid);
+        if (! current.isValid() || current["type"].toString() != "SpectralEqualizer") return;
+        processor.setModuleParameter (channel, selectedUid, juce::Identifier (key), value);
+        for (auto& control : controls) if (control->getComponentID() == key) control->setValueFromState (value);
+    };
+    eqEditor.onBandSelected = [this] (int) { const auto safe = juce::Component::SafePointer<EditorContent> (this); juce::MessageManager::callAsync ([safe] { if (safe) { safe->displayedChain = safe->processor.getModuleChain (safe->channel); safe->rebuildInspector(); safe->resized(); } }); };
+    shownThemeRevision = ThemeProfiles::get().revision();
     addAndMakeVisible (presets); addAndMakeVisible (inputSpectrum); addAndMakeVisible (outputSpectrum);
     undoButton.setTooltip ("Undo (Cmd/Ctrl+Z)"); redoButton.setTooltip ("Redo (Cmd/Ctrl+Shift+Z)");
-    undoButton.onClick = [this] { if (processor.undo()) { rebuildRack(); rebuildInspector(); } };
-    redoButton.onClick = [this] { if (processor.redo()) { rebuildRack(); rebuildInspector(); } };
+    undoButton.onClick = [this] { cancelDrag(); if (processor.undo()) { rebuildRack(); rebuildInspector(); } };
+    redoButton.onClick = [this] { cancelDrag(); if (processor.redo()) { rebuildRack(); rebuildInspector(); } };
     addAndMakeVisible (undoButton); addAndMakeVisible (redoButton);
     licenseButton.setComponentID ("license-status");
     licenseButton.onClick = [this] { settingsPanel.setVisible (false); cancelDrag(); browser.setVisible (false); macroPanel.setVisible (false); licensePanel.setVisible (true); licensePanel.toFront (true); };
@@ -26,7 +44,7 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
         cancelDrag(); browser.setVisible (false); macroPanel.setVisible (false); licensePanel.setVisible (false);
         settingsPanel.refresh(); settingsPanel.setVisible (! settingsPanel.isVisible()); settingsPanel.toFront (true);
     };
-    settingsPanel.changed = [this] { refreshLanguage(); };
+    settingsPanel.changed = [this] { refreshLanguage(); refreshTheme(); };
     addAndMakeVisible (settingsButton); addChildComponent (settingsPanel);
     addAndMakeVisible (macroBar); addChildComponent (macroPanel);
     macroBar.openMappings = [this] (int index) { settingsPanel.setVisible (false); cancelDrag(); browser.setVisible (false); licensePanel.setVisible (false); macroPanel.showMacro (index); };
@@ -139,6 +157,7 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
         if (modulationPage.isVisible()) modulationPage.setVisible (false); else modulationPage.open();
         modulationButton.setToggleState (modulationPage.isVisible(), juce::dontSendNotification);
     };
+    modulationPage.dragOutput = [this] (const auto& uid, auto point, bool finish) { dragModulationOutput (uid, point, finish); };
     modulationPage.closed = [this] { modulationButton.setToggleState (false, juce::dontSendNotification); };
     modulationPage.mappingMenu = [this] (auto& target, const auto& uid, const auto& parameter)
     { macroMenu (target, scrr::params::MacroMapping::modulationChannel, uid, parameter); };
@@ -156,8 +175,40 @@ EditorContent::~EditorContent()
 }
 void EditorContent::timerCallback()
 {
-    undoButton.setEnabled (processor.canUndo()); redoButton.setEnabled (processor.canRedo());
+    ThemeProfiles::get().refreshFromDisk();
+    if (shownThemeRevision != ThemeProfiles::get().revision()) refreshTheme();
+    settingsPanel.tick();
+    if (updates)
+    {
+        const auto state = updates->snapshot();
+        const bool newer = scrr::updates::UpdateService::compareVersions (state.version, JucePlugin_VersionString) > 0;
+        updateNotice.setVisible (newer);
+        updateNotice.setButtonText (promptText ("Newer Version Available"));
+    }
+    if (! guideConsidered && processor.getLicense().isActivated() && isShowing())
+    { guideConsidered = true; if (QuickGuide::shouldShow()) quickGuide.open(); }
+    // A host/preset change invalidates the gesture before any preview rebuild
+    // can adopt its revision and accidentally make a stale drop look current.
     if (revision != processor.getStructureRevision()) { cancelDrag(); rebuildRack(); }
+    if (draggingSource.isNotEmpty())
+    {
+        const auto sources = processor.getModulators();
+        if (std::none_of (sources.begin(), sources.end(), [this] (const auto& source) { return source.uid == draggingSource; })) cancelDrag();
+    }
+    bool changedPreview = false;
+    if ((draggingUid.isNotEmpty() || draggingSource.isNotEmpty()) && hoverChannel > 0
+        && juce::Time::getMillisecondCounterHiRes() - hoverStarted >= 280
+        && (channel != hoverChannel || (draggingSource.isNotEmpty() && modulationPage.getAlpha() > 0)))
+    { previewChannel (hoverChannel); changedPreview = true; }
+    if ((draggingSource.isNotEmpty() || draggingUid.isNotEmpty()) && hoverModuleUid.isNotEmpty() && hoverModuleUid != selectedUid
+        && juce::Time::getMillisecondCounterHiRes() - moduleHoverStarted >= 240)
+    { selectedUid = hoverModuleUid; rebuildRack(); changedPreview = true; }
+    if (changedPreview)
+    {
+        if (draggingSource.isNotEmpty()) dragModulationOutput (draggingSource, localPointToGlobal (dragPoint), false);
+        else if (draggingUid.isNotEmpty()) dragStage (draggingUid, localPointToGlobal (dragPoint), false, copyDrag);
+    }
+    undoButton.setEnabled (processor.canUndo()); redoButton.setEnabled (processor.canRedo());
     if (shownLanguage != PromptLanguage::get()) refreshLanguage();
     if (shownUiScale != UiScale::get()) { shownUiScale = UiScale::get(); settingsPanel.refresh(); }
     if (std::abs (shownFrequencyLimit - processor.getFrequencyLimit()) > .5f)
@@ -172,13 +223,19 @@ void EditorContent::timerCallback()
     if (orderNotice.isVisible() && now >= orderNoticeUntil) orderNotice.setVisible (false);
     const double elapsed = previousTick > 0 ? juce::jmax (0.0, (now - previousTick) / 1000) : 1.0 / 30.0;
     const float dt = (float) juce::jmin (.1, elapsed);
-    previousTick = now; ambient += dt;
+    previousTick = now;
     const auto ease = [] (float t) { return 1 - std::pow (1 - juce::jlimit (0.0f, 1.0f, t), 3.0f); };
     pageProgress = juce::jlimit (0.0f, 1.0f, (float) ((now - pageStart) / 280));
     const float arrival = ease ((pageProgress - .30f) / .70f);
     card.setAlpha (arrival); inspectorViewport.setAlpha (arrival); enabled.setAlpha (arrival);
-    updateCardParameters();
-    card.animate ((float) std::floor (ambient * 8) / 8, arrival);
+    const bool artworkVisible = card.isVisible() && ! quickGuide.isVisible() && ! licensePanel.isVisible()
+        && ! settingsPanel.isVisible() && ! macroPanel.isVisible() && ! browser.isVisible()
+        && (! modulationPage.isVisible() || modulationPage.getAlpha() < .1f);
+    if (artworkVisible)
+    {
+        if (enabled.getToggleState()) ambient += dt;
+        updateCardParameters(); card.animate (ambient, arrival);
+    }
     if (pageProgress >= 1) departingPage = {};
     if (rackProgress < 1)
     {
@@ -213,8 +270,33 @@ void EditorContent::timerCallback()
             dragStage (draggingUid, localPointToGlobal (dragPoint), false, copyDrag);
         }
     }
+    if (draggingSource.isNotEmpty() && modulationPage.getAlpha() < .1f)
+        for (auto* viewport : { &rackViewport, &inspectorViewport })
+            if (viewport->isVisible() && viewport->getBounds().contains (dragPoint))
+            {
+                const int edge = dragPoint.y - viewport->getY();
+                const int delta = edge < 24 ? -9 : edge > viewport->getHeight() - 24 ? 9 : 0;
+                if (delta != 0)
+                {
+                    viewport->setViewPosition (0, viewport->getViewPositionY() + delta);
+                    dragModulationOutput (draggingSource, localPointToGlobal (dragPoint), false);
+                }
+            }
     macroBar.refreshNames(); macroBar.repaint(); macroPanel.repaint(); browser.repaint(); modulationPage.tick(); modulationButton.repaint(); settingsButton.repaint();
     refreshMacroControls();
+    if (eqEditor.isVisible())
+    {
+        displayedChain = processor.getModuleChain (channel);
+        if (shownEqBand != eqEditor.getSelectedBand()) { rebuildInspector(); resized(); }
+        auto state = displayedChain.getChildWithProperty ("uid", selectedUid);
+        if (state.isValid())
+        {
+            eqEditor.setState (state);
+            eqEditor.setSampleRate (processor.getProcessor().getSampleRate() * processor.getProcessor().getOversampleFactor());
+            for (auto& control : controls)
+                if (state.hasProperty (control->getComponentID())) control->setValueFromState (state.getProperty (control->getComponentID()));
+        }
+    }
     updateChannelColours();
     updateLicenseStatus();
     const auto legacySize = juce::String (1024 << (int) processor.getAPVTS().getRawParameterValue (scrr::params::id::fftSize)->load()) + " / L";
@@ -238,7 +320,7 @@ void EditorContent::updateLicenseStatus()
 }
 void EditorContent::refreshLanguage()
 {
-    shownLanguage = PromptLanguage::get(); settingsPanel.refresh(); licensePanel.refreshLanguage();
+    shownLanguage = PromptLanguage::get(); settingsPanel.refresh(); licensePanel.refreshLanguage(); quickGuide.refresh();
     orderNotice.setText (promptText ("GENERIC EFFECTS MUST STAY AT THE END OF THE CHAIN"), juce::dontSendNotification);
     updateLicenseStatus(); repaint();
 }
@@ -246,7 +328,8 @@ void EditorContent::updateCardParameters()
 {
     if (selected < 0) return;
     const auto type = displayedChain.getChild (selected)["type"].toString();
-    if (type != "Reverb" && type != "Delay" && type != "Compressor" && type != "Distortion") return;
+    if (type != "Reverb" && type != "Delay" && type != "Compressor" && type != "Distortion"
+        && type != "SpectralClipper" && type != "SpectralEqualizer") return;
     const auto chain = processor.getModuleChain (channel);
     for (auto child : chain)
         if (child["uid"].toString() == selectedUid)
@@ -321,7 +404,7 @@ void EditorContent::macroMenu (juce::Component& target, int targetChannel, const
         (sources[i].envelope ? envelopes : sources[i].random ? randoms : lfos).addItem (100 + (int) i, sources[i].name, true, sourceAssigned[i]);
     }
     if (lfos.getNumItems() > 0) menu.addSubMenu ("SEND TO LFO", lfos);
-    if (envelopes.getNumItems() > 0) menu.addSubMenu ("SEND TO ENVELOPE", envelopes);
+    if (envelopes.getNumItems() > 0) menu.addSubMenu ("SEND TO AUDIO FOLLOWER", envelopes);
     if (randoms.getNumItems() > 0) menu.addSubMenu ("SEND TO RANDOM", randoms);
     menu.addSeparator(); menu.addItem (10, "REMOVE ALL MODULATION", assigned >= 0 || std::any_of (sourceAssigned.begin(), sourceAssigned.end(), [] (bool value) { return value; }));
     menu.addItem (11, "EDIT MAPPING", assigned >= 0);
@@ -344,6 +427,117 @@ void EditorContent::macroMenu (juce::Component& target, int targetChannel, const
         if (result == 11 && assigned >= 0) safe->macroPanel.showMacro (assigned);
     });
 }
+
+void EditorContent::refreshTheme()
+{
+    shownThemeRevision = ThemeProfiles::get().revision(); look.refreshColours(); gainLook.refreshColours();
+    refreshEditorColours (*this);
+    add.setColour (juce::TextButton::buttonColourId, Theme::blue());
+    modulationButton.setColour (juce::TextButton::buttonColourId, Theme::blue());
+    for (auto* s : { &dryWet, &inputGain, &outputGain, &splitCount, &crossfade })
+    { s->setColour (juce::Slider::trackColourId, Theme::black()); s->setColour (juce::Slider::thumbColourId, Theme::black()); s->setColour (juce::Slider::backgroundColourId, Theme::black().withAlpha (.25f)); }
+    for (auto* gain : { &inputGain, &outputGain }) gain->setColour (juce::Slider::rotarySliderFillColourId, Theme::black());
+    orderNotice.setColour (juce::Label::backgroundColourId, Theme::black()); orderNotice.setColour (juce::Label::textColourId, Theme::yellow());
+    orderNotice.setColour (juce::Label::outlineColourId, Theme::yellow());
+    licenseButton.setColour (juce::TextButton::buttonColourId, processor.getLicense().isActivated() ? Theme::panel() : Theme::red());
+    macroBar.refreshColours(); presets.refreshColours(); licensePanel.refreshColours();
+    inputSpectrum.refreshColours(); outputSpectrum.refreshColours();
+    rebuildInspector(); resized(); sendLookAndFeelChange(); repaint();
+}
+void EditorContent::beginPreview()
+{
+    if (previewing) return;
+    previewing = true; previewOriginChannel = channel; previewOriginUid = selectedUid;
+    previewOriginRackScroll = rackViewport.getViewPosition();
+    previewOriginInspectorScroll = inspectorViewport.getViewPosition();
+}
+void EditorContent::previewChannel (int target)
+{
+    if (target < 1 || target > 4) return;
+    beginPreview();
+    const bool changed = target != channel;
+    if (changed) { channel = target; selectedUid.clear(); hoverModuleUid.clear(); }
+    for (int i = 0; i < 4; ++i) tabs[i].setToggleState (i == channel - 1, juce::dontSendNotification);
+    if (draggingSource.isNotEmpty())
+    {
+        // Keep the source component alive and visible to JUCE's mouse gesture;
+        // alpha and hit testing reveal the existing channel page underneath it.
+        modulationPage.setAlpha (0); modulationPage.setInterceptsMouseClicks (false, false);
+    }
+    if (changed) rebuildRack();
+    repaint();
+}
+void EditorContent::endPreview (bool commit)
+{
+    if (! previewing) return;
+    previewing = false;
+    if (commit) return;
+    channel = previewOriginChannel; selectedUid = previewOriginUid;
+    for (int i = 0; i < 4; ++i) tabs[i].setToggleState (i == channel - 1, juce::dontSendNotification);
+    const auto safe = juce::Component::SafePointer<EditorContent> (this);
+    const int origin = channel; const auto uid = selectedUid;
+    const auto rackScroll = previewOriginRackScroll, inspectorScroll = previewOriginInspectorScroll;
+    juce::MessageManager::callAsync ([safe, origin, uid, rackScroll, inspectorScroll]
+    {
+        if (! safe || safe->draggingUid.isNotEmpty() || safe->draggingSource.isNotEmpty()
+            || safe->channel != origin || safe->selectedUid != uid) return;
+        safe->rebuildRack(); safe->rackViewport.setViewPosition (rackScroll); safe->inspectorViewport.setViewPosition (inspectorScroll);
+    });
+}
+void EditorContent::releaseDragRows()
+{
+    const auto safe = juce::Component::SafePointer<EditorContent> (this);
+    juce::MessageManager::callAsync ([safe]
+    {
+        if (! safe || safe->stageGestureActive) return;
+        safe->retainedDragRows.clear(); safe->dragOrigin = nullptr;
+    });
+}
+void EditorContent::dragModulationOutput (const juce::String& uid, juce::Point<int> screen, bool finish)
+{
+    if (uid == cancelledSource) { if (finish) cancelledSource.clear(); return; }
+    if (draggingSource.isEmpty())
+    {
+        if (finish) return;
+        const auto sources = processor.getModulators();
+        if (std::none_of (sources.begin(), sources.end(), [&uid] (const auto& source) { return source.uid == uid; })) return;
+        draggingSource = uid; beginPreview(); grabKeyboardFocus();
+    }
+    if (revision != processor.getStructureRevision()) { cancelDrag(); return; }
+    dragPoint = getLocalPoint (nullptr, screen);
+    int target = 0;
+    for (int i = 0; i < 4; ++i) if (tabs[i].getBounds().contains (dragPoint)) target = i + 1;
+    if (target != hoverChannel) { hoverChannel = target; hoverStarted = juce::Time::getMillisecondCounterHiRes(); }
+    juce::String hovered;
+    const bool channelRevealed = modulationPage.getAlpha() < .1f;
+    if (channelRevealed && rackViewport.getBounds().contains (dragPoint))
+        for (auto& row : rows) if (getLocalArea (row.get(), row->getLocalBounds()).contains (dragPoint)) hovered = row->uid;
+    if (hovered != hoverModuleUid) { hoverModuleUid = hovered; moduleHoverStarted = juce::Time::getMillisecondCounterHiRes(); }
+    if (sourceDropTarget) sourceDropTarget->setModulationDropHighlight (false);
+    sourceDropTarget = nullptr;
+    if (channelRevealed && inspectorViewport.isVisible() && inspectorViewport.getBounds().contains (dragPoint))
+        for (auto* group : { &common, &controls }) for (auto& control : *group)
+            if (control->isVisible() && control->isEnabled())
+                if (auto* slider = control->getAssignableSlider())
+                    if (slider->isVisible() && slider->canReceiveModulationSource()
+                        && getLocalArea (slider, slider->getLocalBounds()).contains (dragPoint)) sourceDropTarget = slider;
+    if (sourceDropTarget) sourceDropTarget->setModulationDropHighlight (true);
+    if (finish)
+    {
+        const bool assigned = sourceDropTarget && sourceDropTarget->dropModulationSource (uid);
+        endPreview (assigned); cancelDrag (true);
+        if (assigned)
+        {
+            processor.getProcessor().setSoloChannel (channel - 1);
+            modulationPage.setVisible (false); modulationButton.setToggleState (false, juce::dontSendNotification);
+            // The sender's mouseUp must return before any source UI is refreshed.
+            const auto safe = juce::Component::SafePointer<EditorContent> (this);
+            juce::MessageManager::callAsync ([safe] { if (safe) safe->rebuildRack(); });
+        }
+    }
+    repaint();
+}
+
 void EditorContent::selectChannel (int nextChannel)
 {
     cancelDrag(); browser.setVisible (false); modulationPage.setVisible (false); modulationButton.setToggleState (false, juce::dontSendNotification);
@@ -380,6 +574,14 @@ void EditorContent::rebuildRack()
     }
     revision = processor.getStructureRevision(); displayedChain = nextChain;
     selected = nextSelected; selectedUid = nextUid;
+    if (stageGestureActive && dragOrigin)
+        for (auto& row : rows)
+            if (row.get() == dragOrigin.getComponent())
+            {
+                row->setAlpha (0); row->setInterceptsMouseClicks (false, false);
+                row->setComponentID ("retained-stage-" + row->uid);
+                retainedDragRows.push_back (std::move (row));
+            }
     rows.clear(); rowMotion.clear();
     const auto safe = juce::Component::SafePointer<EditorContent> (this);
     for (int i = 0; i < displayedChain.getNumChildren(); ++i)
@@ -427,7 +629,7 @@ void EditorContent::rebuildInspector()
     shownFrequencyLimit = processor.getFrequencyLimit();
     controls.clear(); common.clear(); selectedName.clear(); selectedDescription.clear();
     const bool valid = selected >= 0;
-    notesPanel.setVisible (false); inspectorViewport.setVisible (true);
+    notesPanel.setVisible (false); eqEditor.setVisible (false); shownEqBand = -1; inspectorViewport.setVisible (true);
     card.setVisible (valid);
     enabled.setVisible (valid);
     if (! valid) { updateRange(); return; }
@@ -475,6 +677,8 @@ void EditorContent::rebuildInspector()
             const auto sliderSafe = juce::Component::SafePointer<AssignableSlider> (slider);
             slider->mappingMenu = [safe, sliderSafe, targetChannel, uid, id]
             { if (safe && sliderSafe) safe->macroMenu (*sliderSafe, targetChannel, uid, juce::Identifier (id)); };
+            slider->receiveModulationSource = [safe, targetChannel, uid, id] (const juce::String& source)
+            { if (safe) safe->processor.assignModulator (source, targetChannel, uid, juce::Identifier (id)); };
             slider->changeMapping = [safe] (auto mapping) { if (safe) safe->processor.updateMacroMapping (mapping); };
             slider->unmapRoute = [safe, targetChannel, uid, id] (auto mapping) { if (safe) safe->processor.removeMacroMapping (targetChannel, uid, juce::Identifier (id), mapping.macro, mapping.sourceUid); };
             std::vector<scrr::params::MacroMapping> mappings;
@@ -491,7 +695,15 @@ void EditorContent::rebuildInspector()
         makeControl (scrr::dsp::makeFloat ("rangeHigh", "HIGH / Hz", 0, shownFrequencyLimit, shownFrequencyLimit, 1, " Hz"), true);
         makeControl (scrr::dsp::makeFloat ("moduleMix", "STAGE MIX", 0, 100, 100, .1f, " %"), true);
     }
-    for (const auto& param : spec->params) makeControl (param, false);
+    if (type == "SpectralEqualizer")
+    {
+        eqEditor.setState (child); eqEditor.setAccent (effectActive ? Theme::yellow() : Theme::inactive());
+        eqEditor.setSampleRate (processor.getProcessor().getSampleRate() * processor.getProcessor().getOversampleFactor()); eqEditor.setVisible (true);
+        shownEqBand = eqEditor.getSelectedBand();
+        const auto prefix = "band" + juce::String (eqEditor.getSelectedBand() + 1);
+        for (const auto& param : spec->params) if (param.id.startsWith (prefix)) makeControl (param, false);
+    }
+    else for (const auto& param : spec->params) makeControl (param, false);
     if (type == "Delay")
         for (auto& c : controls)
             if (c->getComponentID() == "time" || c->getComponentID() == "division")
@@ -516,10 +728,22 @@ void EditorContent::updateRange()
     inputSpectrum.setRange (low, high, active); outputSpectrum.setRange (low, high, active);
 }
 void EditorContent::addMenu() { cancelDrag(); browser.open(); }
-void EditorContent::cancelDrag()
+void EditorContent::cancelDrag (bool gestureFinished)
 {
+    if (! gestureFinished)
+    {
+        if (draggingUid.isNotEmpty()) cancelledDragUid = draggingUid;
+        if (draggingSource.isNotEmpty()) cancelledSource = draggingSource;
+    }
+    else stageGestureActive = false;
     for (auto& row : rows) row->setAlpha (1);
-    draggingUid.clear(); dragImage = {}; insertion = -1; removeTarget = false; dropChannel = 0; copyDrag = false; invalidOrder = false;
+    endPreview (false);
+    draggingUid.clear(); draggingSource.clear(); hoverChannel = 0; hoverModuleUid.clear();
+    if (sourceDropTarget) sourceDropTarget->setModulationDropHighlight (false);
+    sourceDropTarget = nullptr;
+    modulationPage.setAlpha (1); modulationPage.setInterceptsMouseClicks (true, true);
+    if (! stageGestureActive) releaseDragRows();
+    dragImage = {}; insertion = -1; removeTarget = false; dropChannel = 0; copyDrag = false; invalidOrder = false;
     repaint();
 }
 bool EditorContent::keyPressed (const juce::KeyPress& key)
@@ -528,34 +752,41 @@ bool EditorContent::keyPressed (const juce::KeyPress& key)
     {
         if (key.getTextCharacter() == 'z' || key.getTextCharacter() == 'Z')
         {
+            cancelDrag();
             const bool changed = key.getModifiers().isShiftDown() ? processor.redo() : processor.undo();
             if (changed) { rebuildRack(); rebuildInspector(); }
             return true;
         }
         if ((key.getTextCharacter() == 'y' || key.getTextCharacter() == 'Y') && key.getModifiers().isCtrlDown())
         {
+            cancelDrag();
             if (processor.redo()) { rebuildRack(); rebuildInspector(); }
             return true;
         }
     }
+    if (key == juce::KeyPress::escapeKey && (draggingSource.isNotEmpty() || draggingUid.isNotEmpty()))
+    { cancelledSource = draggingSource; cancelledDragUid = draggingUid; cancelDrag(); return true; }
+    if (key == juce::KeyPress::escapeKey && quickGuide.isVisible()) { quickGuide.setVisible (false); return true; }
     if (key == juce::KeyPress::escapeKey && (licensePanel.isVisible() || macroPanel.isVisible() || settingsPanel.isVisible()))
     { licensePanel.setVisible (false); macroPanel.setVisible (false); settingsPanel.setVisible (false); return true; }
     if (key == juce::KeyPress::escapeKey && modulationPage.isVisible()) { modulationPage.setVisible (false); modulationButton.setToggleState (false, juce::dontSendNotification); return true; }
-    if (key == juce::KeyPress::escapeKey && draggingUid.isNotEmpty()) { cancelledDragUid = draggingUid; cancelDrag(); return true; }
     return false;
 }
 void EditorContent::dragStage (const juce::String& uid, juce::Point<int> screen, bool finish, bool duplicateHeld)
 {
     if (uid == cancelledDragUid)
-    { if (finish) cancelledDragUid.clear(); return; }
+    {
+        if (finish) { cancelledDragUid.clear(); stageGestureActive = false; releaseDragRows(); }
+        return;
+    }
     if (processor.getStructureRevision() != revision)
     { cancelDrag(); return; }
     if (draggingUid.isEmpty())
     {
         if (finish) return;
-        draggingUid = uid; draggingChannel = channel; browser.setVisible (false);
+        draggingUid = uid; draggingChannel = channel; stageGestureActive = true; beginPreview(); browser.setVisible (false);
         for (const auto& row : rows) if (row->uid == uid)
-        { dragImage = row->createComponentSnapshot (row->getLocalBounds()); row->setAlpha (.25f); }
+        { dragOrigin = row.get(); dragImage = row->createComponentSnapshot (row->getLocalBounds()); row->setAlpha (.25f); }
         grabKeyboardFocus();
     }
     dragPoint = getLocalPoint (nullptr, screen);
@@ -563,13 +794,18 @@ void EditorContent::dragStage (const juce::String& uid, juce::Point<int> screen,
     copyDrag = duplicateHeld;
     dropChannel = 0;
     for (int i = 0; i < 4; ++i) if (tabs[i].getBounds().contains (dragPoint)) dropChannel = i + 1;
+    if (dropChannel != hoverChannel) { hoverChannel = dropChannel; hoverStarted = juce::Time::getMillisecondCounterHiRes(); }
+    juce::String hovered;
+    if (rackViewport.getBounds().contains (dragPoint))
+        for (const auto& row : rows) if (getLocalArea (row.get(), row->getLocalBounds()).contains (dragPoint)) hovered = row->uid;
+    if (hovered != hoverModuleUid) { hoverModuleUid = hovered; moduleHoverStarted = juce::Time::getMillisecondCounterHiRes(); }
     removeTarget = target.contains (dragPoint) && ! copyDrag;
     insertion = -1; invalidOrder = false;
     if (rackViewport.getBounds().contains (dragPoint))
     {
         int boundary = 0;
         while (boundary < displayedChain.getNumChildren() && ! scrr::dsp::isGenericEffect (displayedChain.getChild (boundary)["type"].toString())) ++boundary;
-        const auto moving = displayedChain.getChildWithProperty ("uid", uid);
+        const auto moving = processor.getModuleChain (draggingChannel).getChildWithProperty ("uid", uid);
         const bool generic = scrr::dsp::isGenericEffect (moving["type"].toString());
         const int requested = juce::jlimit (0, displayedChain.getNumChildren(), (dragPoint.y - rackViewport.getY() + rackViewport.getViewPositionY() + 28) / 56);
         invalidOrder = moving["type"].toString() != "Notes" && (generic ? requested < boundary : requested > boundary);
@@ -585,9 +821,13 @@ void EditorContent::dragStage (const juce::String& uid, juce::Point<int> screen,
         const bool erase = removeTarget, duplicate = copyDrag;
         const int slot = insertion, sourceChannel = draggingChannel, targetChannel = dropChannel > 0 ? dropChannel : channel;
         const bool validTarget = dropChannel > 0 || slot >= 0;
-        const auto movingUid = draggingUid; cancelDrag();
+        const auto movingUid = draggingUid;
+        // Keep the preview transaction until the transfer succeeds. A rejected
+        // cross-channel order/capacity drop must restore the original page too.
+        const int originChannel = previewOriginChannel; const auto originUid = previewOriginUid;
+        endPreview (validTarget); cancelDrag (true);
         const auto safe = juce::Component::SafePointer<EditorContent> (this);
-        juce::MessageManager::callAsync ([safe, movingUid, sourceChannel, targetChannel, slot, erase, duplicate, validTarget]
+        juce::MessageManager::callAsync ([safe, movingUid, sourceChannel, targetChannel, slot, erase, duplicate, validTarget, originChannel, originUid]
         {
             if (! safe) return;
             if (erase)
@@ -599,7 +839,12 @@ void EditorContent::dragStage (const juce::String& uid, juce::Point<int> screen,
             else if (validTarget)
             {
                 const auto next = safe->processor.transferModule (sourceChannel, movingUid, targetChannel, slot, duplicate);
-                if (next.isEmpty()) return;
+                if (next.isEmpty())
+                {
+                    safe->channel = originChannel; safe->selectedUid = originUid;
+                    for (int i = 0; i < 4; ++i) safe->tabs[i].setToggleState (i == originChannel - 1, juce::dontSendNotification);
+                    safe->rebuildRack(); return;
+                }
                 safe->channel = targetChannel; safe->selectedUid = next;
                 safe->processor.getProcessor().setSoloChannel (targetChannel - 1);
                 for (int i = 0; i < 4; ++i) safe->tabs[i].setToggleState (i == targetChannel - 1, juce::dontSendNotification);
@@ -640,6 +885,7 @@ void EditorContent::resized()
     auto area = getLocalBounds().reduced (12);
     headerArea = area.removeFromTop (76); area.removeFromTop (8);
     settingsButton.setBounds (headerArea.withTrimmedLeft (headerArea.getWidth() - 84));
+    updateNotice.setBounds (headerArea.getRight() - 500, headerArea.getY() + 47, 230, 24);
     auto presetRow = area.removeFromTop (34);
     licenseButton.setBounds (presetRow.removeFromRight (106)); presetRow.removeFromRight (8);
     redoButton.setBounds (presetRow.removeFromRight (58).reduced (2, 1));
@@ -658,20 +904,21 @@ void EditorContent::resized()
     main.removeFromTop (8);
     rackArea = main.removeFromLeft (230); main.removeFromLeft (10); detailArea = main;
     auto chain = rackArea;
-    chain.removeFromTop (33); add.setBounds (chain.removeFromTop (34)); chain.removeFromTop (26);
+    chain.removeFromTop (33); add.setBounds (chain.removeFromTop (34)); chain.removeFromTop (45);
     rackViewport.setBounds (chain);
     const int rowWidth = juce::jmax (100, rackViewport.getWidth() - 10);
     if (! layingOutMotion) { rackProgress = 1; retiringRow = {}; }
     int y = 0;
     for (auto& row : rows) { row->setBounds (0, y, rowWidth, 56); y += 56; }
     rack.setSize (rowWidth, juce::jmax (y, chain.getHeight()));
-    auto detail = detailArea.reduced (14, 0); moduleHeader = detail.removeFromTop (140);
+    auto detail = detailArea.reduced (14, 0); moduleHeader = detail.removeFromTop (eqEditor.isVisible() ? 72 : 140);
     card.setBounds (moduleHeader); notesPanel.setBounds (detailArea.reduced (14, 10)); detail.removeFromTop (7);
     auto actions = detail.removeFromTop (25); enabled.setBounds (actions.removeFromLeft (115)); detail.removeFromTop (9);
     browser.setBounds (detailArea);
     orderNotice.setBounds (detailArea.reduced (14, 0).withTrimmedTop (10).withHeight (48));
     modulationPage.setBounds (rackArea.getUnion (detailArea));
-    settingsPanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (520, getWidth() - 48), 554));
+    settingsPanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (600, getWidth() - 48), 620));
+    quickGuide.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (740, getWidth() - 48), juce::jmin (640, getHeight() - 48)));
     licensePanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (620, getWidth() - 48), 452));
     macroPanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (900, getWidth() - 48), 470));
     inspectorViewport.setBounds (detail); emptyArea = detailArea;
@@ -679,8 +926,14 @@ void EditorContent::resized()
     const int commonWidth = width / 3;
     int commonHeight = 0;
     for (const auto& c : common) commonHeight = juce::jmax (commonHeight, c->preferredHeight());
-    for (size_t i = 0; i < common.size(); ++i) common[i]->setBounds ((int) i * commonWidth, 0, commonWidth - 8, commonHeight);
-    int controlY = common.empty() ? 0 : commonHeight + 10;
+    int controlY = 0;
+    if (eqEditor.isVisible())
+    {
+        const int graphHeight = juce::jlimit (150, SpectralEqEditor::preferredHeight(), detail.getHeight() - 12);
+        eqEditor.setBounds (0, 0, width, graphHeight); controlY = graphHeight + 10;
+    }
+    for (size_t i = 0; i < common.size(); ++i) common[i]->setBounds ((int) i * commonWidth, controlY, commonWidth - 8, commonHeight);
+    controlY += common.empty() ? 0 : commonHeight + 10;
     for (size_t i = 0; i < controls.size(); i += 2)
     {
         int height = controls[i]->preferredHeight();
@@ -733,7 +986,8 @@ void EditorContent::paint (juce::Graphics& g)
     Theme::text (g, juce::String (latency, 1) + " ms", { masterArea.getRight() - 82, masterArea.getBottom() - 36, 70, 28 }, 12, Theme::black(), true, juce::Justification::centredRight);
     g.setColour (Theme::panel()); g.fillRect (detailArea);
     Theme::text (g, "CH " + juce::String (channel) + " / SIGNAL CHAIN / " + juce::String (rows.size()), rackArea.withHeight (26), 13, Theme::white(), true);
-    Theme::text (g, "DRAG TO CH / CMD-CTRL: COPY", { rackArea.getX(), add.getBottom() + 3, rackArea.getWidth(), 19 }, 9, Theme::dim());
+    Theme::text (g, promptText ("DRAG TO CH / CMD-CTRL: COPY"), { rackArea.getX(), add.getBottom() + 3, rackArea.getWidth(), 19 }, 9, Theme::dim());
+    Theme::text (g, promptText ("DRAG TO DETAIL TARGET TO DELETE"), { rackArea.getX(), add.getBottom() + 21, rackArea.getWidth(), 19 }, 9, Theme::dim());
     if (selected >= 0 && selected < (int) rows.size())
     {
         const auto row = getLocalArea (rows[(size_t) selected].get(), rows[(size_t) selected]->getLocalBounds());
@@ -755,7 +1009,17 @@ void EditorContent::paint (juce::Graphics& g)
 }
 void EditorContent::paintOverChildren (juce::Graphics& g)
 {
-    if (licensePanel.isVisible() || macroPanel.isVisible() || settingsPanel.isVisible() || modulationPage.isVisible()) return;
+    if (draggingSource.isNotEmpty())
+    {
+        const int x = juce::jlimit (8, getWidth() - 269, dragPoint.x + 12);
+        const int y = juce::jlimit (8, getHeight() - 36, dragPoint.y + 15);
+        const juce::Rectangle<int> hint { x, y, 261, 28 };
+        g.setColour (Theme::black()); g.fillRect (hint);
+        g.setColour (Theme::yellow()); g.drawRect (hint);
+        Theme::text (g, promptText ("DROP OUTPUT ON A PARAMETER"), hint.reduced (8, 0), 12, Theme::yellow(), true);
+        return;
+    }
+    if (quickGuide.isVisible() || licensePanel.isVisible() || macroPanel.isVisible() || settingsPanel.isVisible() || modulationPage.isVisible()) return;
     if (orderNotice.isVisible()) g.excludeClipRegion (orderNotice.getBounds());
     if (! browser.isVisible() && ! departingPage.isNull() && pageProgress < .46f)
     {
@@ -770,7 +1034,7 @@ void EditorContent::paintOverChildren (juce::Graphics& g)
     }
     if (draggingUid.isEmpty()) return;
     const auto target = detailArea.withSizeKeepingCentre (juce::jmin (280, detailArea.getWidth() - 40), 126);
-    g.setColour (Theme::black().withAlpha (.78f)); g.fillRect (detailArea);
+    // Leave the previewed effect visible around the explicit deletion target.
     g.setColour (removeTarget ? Theme::red() : Theme::panel()); g.fillRect (target);
     g.setColour (Theme::red()); g.drawRect (target, removeTarget ? 4 : 2);
     Theme::text (g, promptText (copyDrag ? "DROP ON CH TO COPY" : removeTarget ? "RELEASE TO REMOVE" : "DROP HERE TO REMOVE"), target.reduced (16).withTrimmedBottom (35), 20,

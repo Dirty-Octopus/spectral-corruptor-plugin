@@ -14,20 +14,30 @@ public:
     explicit PresetBar (SpectralCrrptProcessor&, juce::File libraryDirectory = {});
     ~PresetBar() override;
     void resized() override;
+    void refreshColours();
 private:
+    class PresetButton : public juce::TextButton
+    {
+    public:
+        explicit PresetButton (const juce::String& label) : juce::TextButton (label) {}
+        bool shiftClick {};
+        void clicked (const juce::ModifierKeys& modifiers) override
+        { shiftClick = modifiers.isShiftDown(); juce::TextButton::clicked (modifiers); }
+    };
     void timerCallback() override;
     void setStatus (const juce::String& text) { statusKey = text; status.setText (promptText (text), juce::dontSendNotification); }
     void showMenu();
-    void select (int);
-    void requestSelect (int);
-    void step (int);
+    void select (int, bool keepRecovery = false);
+    void requestSelect (int, bool keepRecovery = false);
+    void step (int, bool keepRecovery = false);
     void saveLibrary();
     void exportFile();
     void importFile();
     void saved (const juce::Result&, const juce::String&);
     SpectralCrrptProcessor& processor;
     scrr::PresetManager manager;
-    juce::TextButton preset { "Init" }, previous { "<" }, next { ">" }, save { "SAVE" }, exportButton { "EXPORT" }, load { "IMPORT" };
+    PresetButton preset { "Init" }, previous { "<" }, next { ">" };
+    juce::TextButton save { "SAVE" }, exportButton { "EXPORT" }, load { "IMPORT" };
     juce::Label status;
     juce::String statusKey;
     int index { -1 };

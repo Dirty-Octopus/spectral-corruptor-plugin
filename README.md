@@ -20,6 +20,12 @@ All plugin DSP, modules, GUI, macros, modulation, state/preset management and bu
 
 **The default build compiles but cannot process input audio.** It outputs only pink noise, including with internal bypass or Dry/Wet at zero. No activation string or official `.sclicense` file can unlock the supplied placeholder. Implement your own backend before using your build. See [licensing integration](docs/LICENSING.md).
 
+## v0.2.0
+
+Includes Spectral Clipper, an eight-band Spectral Equalizer, Shift preset recovery, chain-style modulation management with Audio Follower, drag-to-parameter routing, named HEX colour profiles and a bilingual Quick Guide. See [the interaction guide](docs/V0_2_UX.md).
+
+The source edition does not download or install official binaries over your own build. Update this source repository and rebuild. JUCE's standard SHA-256 utility remains linked for source compatibility; the official activation backend, native verification implementation and keys remain excluded.
+
 ## Build
 
 ```sh

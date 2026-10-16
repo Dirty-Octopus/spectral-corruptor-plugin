@@ -28,6 +28,8 @@
 #include "HarmonicTools.h"
 #include "SpectralShapes.h"
 #include "GenericEffects.h"
+#include "SpectralClipper.h"
+#include "SpectralEqualizer.h"
 
 namespace scrr::dsp {
 
@@ -60,6 +62,8 @@ inline std::unique_ptr<SpectralModule> createModule (const juce::String& typeId)
     if (typeId == "SpectralMirror") return std::make_unique<SpectralMirror>();
     if (typeId == "SpectralBloom") return std::make_unique<SpectralBloom>();
     if (typeId == "SpectralComb") return std::make_unique<SpectralComb>();
+    if (typeId == "SpectralClipper") return std::make_unique<SpectralClipper>();
+    if (typeId == "SpectralEqualizer") return std::make_unique<SpectralEqualizer>();
     if (typeId == "Reverb") return std::make_unique<GenericReverb>();
     if (typeId == "Delay") return std::make_unique<GenericDelay>();
     if (typeId == "Compressor") return std::make_unique<GenericCompressor>();

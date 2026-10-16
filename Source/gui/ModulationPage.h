@@ -5,10 +5,13 @@
 #include "FrequencyScale.h"
 #include "Theme.h"
 #include "AssignableSlider.h"
+#include "PromptLanguage.h"
 #include "../PluginProcessor.h"
 #include <deque>
 
 namespace scrr::gui {
+inline juce::String modulationHint (const char* english, const char* chinese)
+{ return PromptLanguage::get() == PromptLanguage::Language::chinese ? juce::String::fromUTF8 (chinese) : juce::String (english); }
 class ModulationCurve : public juce::Component, public juce::SettableTooltipClient
 {
 public:
@@ -146,6 +149,44 @@ private:
     void submit() { if (changed) changed (source); repaint(); }
     int selected { -1 }, curveSegment { -1 }, hoverSegment { -1 }, curveStartY {}; float curveStart {}, output {}, playhead {}; std::deque<float> history;
 };
+// A separate handle keeps assigning an output distinct from editing a source
+// parameter or dragging its row to reorder the management list.
+class ModulationOutputHandle : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    ModulationOutputHandle()
+    {
+        setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        setTooltip (modulationHint ("Drag this output over a CH tab, then an effect and its parameter. Release to assign.",
+                                   u8"拖动此输出，悬停 CH 标签与效果模块以预览，再松开到参数上建立调制映射。"));
+    }
+    std::function<void(juce::Point<int>, bool)> drag;
+    void setOutput (float next, bool on)
+    { level = juce::jlimit (0.0f, 1.0f, next); active = on; repaint(); }
+    void paint (juce::Graphics& g) override
+    {
+        const auto colour = active ? Theme::yellow() : Theme::inactive();
+        g.setColour (isMouseOverOrDragging() ? colour.withAlpha (.22f) : Theme::field()); g.fillRect (getLocalBounds());
+        g.setColour (colour); g.drawRect (getLocalBounds(), dragging ? 2 : 1);
+        auto a = getLocalBounds().reduced (5, 3);
+        Theme::text (g, "OUTPUT", a.withTrimmedBottom (6), 9, colour, true, juce::Justification::centred);
+        auto meter = a.removeFromBottom (3); g.setColour (colour.withAlpha (.25f)); g.fillRect (meter);
+        g.setColour (colour); g.fillRect (meter.withWidth ((int) std::round (level * (float) meter.getWidth())));
+    }
+    void mouseDown (const juce::MouseEvent& event) override { dragging = false; popup = event.mods.isPopupMenu(); }
+    void mouseDrag (const juce::MouseEvent& event) override
+    {
+        if (popup || (event.getDistanceFromDragStart() < 6 && ! dragging)) return;
+        dragging = true; repaint(); const auto callback = drag; if (callback) callback (event.getScreenPosition(), false);
+    }
+    void mouseUp (const juce::MouseEvent& event) override
+    {
+        const bool finish = dragging && ! popup; dragging = false; repaint();
+        const auto callback = drag; if (finish && callback) callback (event.getScreenPosition(), true);
+    }
+private:
+    bool active { true }, dragging {}, popup {}; float level {};
+};
 class ModulatorCard : public juce::Component
 {
 public:
@@ -153,10 +194,13 @@ public:
     {
         setComponentID ("modulator-" + source.uid);
         title.setText (source.name, juce::dontSendNotification); title.setEditable (false, true); title.setFont (Theme::font (19, true));
-        title.onTextChange = [this] { source.name = title.getText().trim().substring (0, 32); if (source.name.isEmpty()) source.name = source.envelope ? "Envelope" : source.random ? "Random" : "LFO"; submit(); }; addAndMakeVisible (title);
+        title.onTextChange = [this] { source.name = title.getText().trim().substring (0, 32); if (source.name.isEmpty()) source.name = source.envelope ? "Audio Follower" : source.random ? "Random" : "LFO"; submit(); }; addAndMakeVisible (title);
         enabled.setToggleState (source.enabled, juce::dontSendNotification); enabled.onClick = [this] { source.enabled = enabled.getToggleState(); submit(); }; addAndMakeVisible (enabled);
         remove.onClick = [this] { if (removeSource) removeSource (source.uid); }; addAndMakeVisible (remove);
         mappings.onClick = [this] { if (showMappings) showMappings (source.uid); }; addAndMakeVisible (mappings);
+        output.setComponentID ("modulation-output-" + source.uid);
+        output.drag = [this] (juce::Point<int> screen, bool finish) { if (dragOutput) dragOutput (source.uid, screen, finish); };
+        addAndMakeVisible (output);
         curve.source = source; curve.changed = [this] (auto next) { source.points = std::move (next.points); source.shape = next.shape; shape.setSelectedItemIndex (source.shape, juce::dontSendNotification); submit(); }; addAndMakeVisible (curve);
         if (source.envelope || source.random) curve.setTooltip ("Live modulation output history.");
         if (source.envelope)
@@ -202,6 +246,7 @@ public:
         if (source.envelope || source.random) configureMapping (third, source.random ? "smooth" : "release");
     }
     std::function<void(const juce::String&)> removeSource, showMappings;
+    std::function<void(const juce::String&, juce::Point<int>, bool)> dragOutput;
     const juce::String& uid() const { return source.uid; }
     std::function<void(juce::Component&, const juce::String&, const juce::Identifier&)> mappingMenu;
     int extraHeight() const { return mappingHeight(); }
@@ -210,6 +255,9 @@ public:
     {
         // Base edits in the mapping panel must also reach the card's cached source.
         source = current;
+        if (! title.isBeingEdited()) title.setText (source.name, juce::dontSendNotification);
+        enabled.setToggleState (source.enabled, juce::dontSendNotification);
+        output.setOutput (value, source.enabled);
         const int oldHeight = mappingHeight();
         for (auto* slider : { &first, &second, &third })
         {
@@ -227,7 +275,8 @@ public:
     {
         auto a = getLocalBounds().reduced (12); auto header = a.removeFromTop (26);
         remove.setBounds (header.removeFromRight (26)); header.removeFromRight (6); enabled.setBounds (header.removeFromRight (66)); title.setBounds (header);
-        a.removeFromTop (8); curve.setBounds (a.removeFromTop (juce::jmax (56, getHeight() - (source.random ? 236 : 192) - mappingHeight()))); a.removeFromTop (8);
+        a.removeFromTop (6); auto outputRow = a.removeFromTop (26); output.setBounds (outputRow.removeFromRight (86));
+        a.removeFromTop (8); curve.setBounds (a.removeFromTop (juce::jmax (68, getHeight() - (source.random ? 268 : 224) - mappingHeight()))); a.removeFromTop (8);
         auto choice = a.removeFromTop (26); mappings.setBounds (choice.removeFromRight (70)); choice.removeFromRight (8); shape.setBounds (choice);
         a.removeFromTop (19); auto row = a.removeFromTop (25 + juce::jmax (first.modulationHeight(), second.modulationHeight())); first.setBounds (row.removeFromLeft (row.getWidth() / 2).withTrimmedRight (8)); second.setBounds (row);
         if (source.envelope || source.random) { a.removeFromTop (19); third.setBounds (a.removeFromTop (25 + third.modulationHeight())); }
@@ -240,6 +289,8 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.fillAll (Theme::panel()); g.setColour (source.enabled ? (source.envelope ? Theme::yellow() : source.random ? Theme::red() : Theme::blue()) : Theme::inactive()); g.fillRect (0, 0, 4, getHeight());
+        Theme::text (g, source.envelope ? "AUDIO FOLLOWER" : source.random ? "RANDOM" : "LFO",
+                     { 12, 44, juce::jmax (0, getWidth() - 118), 26 }, 11, Theme::dim(), true);
         auto label = [&] (const juce::String& text, const juce::Component& control) { Theme::text (g, text, control.getBounds().translated (0, -17).withHeight (15), 9, Theme::dim(), true); };
         label (source.envelope ? "GAIN" : source.sync ? "BEAT DIVISION" : "RATE", first); label (source.envelope ? "RISE" : source.random ? "SEED" : "PHASE", second);
         if (source.envelope || source.random) label (source.random ? "SMOOTH" : "FALL", third);
@@ -259,7 +310,54 @@ private:
     SpectralCrrptProcessor& processor; scrr::params::ModulationSource source;
     juce::Label title; juce::ToggleButton enabled { "ON" }, sync { "SYNC" }, retrigger { "RESTART" };
     juce::TextButton remove { "x" }, mappings { "MAPS" };
+    ModulationOutputHandle output;
     ModulationCurve curve; juce::ComboBox shape, division; AssignableSlider first, second, third;
+};
+class ModulatorRow : public juce::Component
+{
+public:
+    explicit ModulatorRow (scrr::params::ModulationSource initial) : source (std::move (initial))
+    {
+        setComponentID ("modulator-row-" + source.uid); setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        output.setComponentID ("modulation-row-output-" + source.uid);
+        output.drag = [this] (juce::Point<int> screen, bool finish) { if (dragOutput) dragOutput (source.uid, screen, finish); };
+        addAndMakeVisible (output);
+    }
+    std::function<void(const juce::String&)> choose;
+    std::function<void(const juce::String&, juce::Point<int>, bool)> reorder, dragOutput;
+    const juce::String& uid() const { return source.uid; }
+    void update (const scrr::params::ModulationSource& next, int index, bool isSelected, float value)
+    { source = next; number = index; selected = isSelected; output.setOutput (value, source.enabled); repaint(); }
+    void setDragged (bool value) { setAlpha (value ? .35f : 1.0f); }
+    void resized() override { output.setBounds (getWidth() - 63, 10, 57, 33); }
+    void paint (juce::Graphics& g) override
+    {
+        const auto accent = source.enabled ? Theme::yellow() : Theme::inactive();
+        g.fillAll (selected ? accent : isMouseOver (true) ? Theme::panel().brighter (.13f) : Theme::panel());
+        const auto ink = selected ? Theme::black() : source.enabled ? Theme::white() : Theme::dim();
+        Theme::text (g, juce::String (number + 1).paddedLeft ('0', 2), { 9, 5, 24, 26 }, 16, ink, true);
+        Theme::text (g, source.name, { 36, 4, juce::jmax (0, getWidth() - 103), 26 }, 12, ink, true);
+        Theme::text (g, source.envelope ? "AUDIO FOLLOWER" : source.random ? "RANDOM" : "LFO",
+                     { 36, 30, juce::jmax (0, getWidth() - 103), 16 }, 8, ink, true);
+        g.setColour (selected ? Theme::red() : Theme::line()); g.fillRect (0, 0, 3, getHeight() - 2);
+        g.setColour (Theme::black()); g.fillRect (0, getHeight() - 2, getWidth(), 2);
+    }
+    void mouseDown (const juce::MouseEvent& event) override { dragging = false; popup = event.mods.isPopupMenu(); }
+    void mouseDrag (const juce::MouseEvent& event) override
+    {
+        if (popup || (event.getDistanceFromDragStart() < 6 && ! dragging)) return;
+        dragging = true; if (reorder) reorder (source.uid, event.getScreenPosition(), false);
+    }
+    void mouseUp (const juce::MouseEvent& event) override
+    {
+        if (popup) return;
+        const bool moved = dragging; dragging = false;
+        if (moved) { if (reorder) reorder (source.uid, event.getScreenPosition(), true); }
+        else if (choose) choose (source.uid);
+    }
+private:
+    scrr::params::ModulationSource source; ModulationOutputHandle output;
+    int number {}; bool selected {}, dragging {}, popup {};
 };
 class ModulationPage : public juce::Component
 {
@@ -268,82 +366,214 @@ public:
     {
         setComponentID ("modulation-page");
         view.setViewedComponent (&list, false); view.setScrollBarsShown (true, false); addAndMakeVisible (view);
-        addLFO.setComponentID ("add-lfo"); addEnv.setComponentID ("add-envelope");
-        addLFO.onClick = [this] { processor.addModulator (false); refresh(); view.setViewPosition (0, list.getHeight()); };
-        addEnv.onClick = [this] { processor.addModulator (true); refresh(); view.setViewPosition (0, list.getHeight()); };
-        addRandom.setComponentID ("add-random");
-        addRandom.onClick = [this] { processor.addModulator (false, true); refresh(); view.setViewPosition (0, list.getHeight()); };
+        detailView.setViewedComponent (&details, false); detailView.setScrollBarsShown (true, false); addAndMakeVisible (detailView);
+        addLFO.setComponentID ("add-lfo"); addEnv.setComponentID ("add-envelope"); addRandom.setComponentID ("add-random");
+        addLFO.onClick = [this] { addSource (false, false); };
+        addEnv.onClick = [this] { addSource (true, false); };
+        addRandom.onClick = [this] { addSource (false, true); };
         close.onClick = [this] { setVisible (false); if (closed) closed(); };
-        for (auto* b : { &addLFO, &addEnv, &addRandom, &close }) addAndMakeVisible (b);
+        for (auto* button : { &addLFO, &addEnv, &addRandom, &close }) addAndMakeVisible (button);
     }
-    ~ModulationPage() override { view.setViewedComponent (nullptr, false); }
+    ~ModulationPage() override { view.setViewedComponent (nullptr, false); detailView.setViewedComponent (nullptr, false); }
     std::function<void()> closed;
     std::function<void(const juce::String&)> openMappings;
     std::function<void(juce::Component&, const juce::String&, const juce::Identifier&)> mappingMenu;
+    // EditorContent owns the cross-page preview and drop transaction. It must
+    // retain this page while a handle is being dragged, including while hidden.
+    std::function<void(const juce::String&, juce::Point<int>, bool)> dragOutput;
+    const juce::String& selectedSource() const noexcept { return selectedUid; }
+    bool isOutputDragActive() const noexcept { return outputDragging; }
     void open() { refresh(); setVisible (true); toFront (true); }
+    void selectSource (const juce::String& uid)
+    {
+        if (std::none_of (cards.begin(), cards.end(), [&] (const auto& card) { return card->uid() == uid; })) return;
+        selectedUid = uid; detailView.setViewPosition (0, 0); updateSelection(); resized(); repaint();
+    }
+    void cancelReorder()
+    {
+        draggingUid.clear(); insertion = -1; removeTarget = false;
+        for (auto& row : rows) row->setDragged (false);
+        repaint();
+    }
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey && draggingUid.isNotEmpty())
+        { cancelledUid = draggingUid; cancelReorder(); return true; }
+        return false;
+    }
     void tick()
     {
         if (! isVisible()) return;
-        if (revision != processor.getModulatorRevision()) refresh();
+        if (revision != processor.getModulatorRevision())
+        {
+            if (outputDragging) return;
+            cancelReorder(); refresh();
+        }
         const auto values = processor.getModulationValues();
         const auto routes = processor.getMacroMappings();
         const auto sources = processor.getModulators(); bool layout = false;
         for (size_t i = 0; i < cards.size() && i < sources.size(); ++i)
         {
+            rows[i]->update (sources[i], (int) i, sources[i].uid == selectedUid, values[i + 8]);
+            if (sources[i].uid != selectedUid) continue;
             const int previous = cards[i]->extraHeight();
             cards[i]->tick (values[i + 8], processor.getModulatorPhase ((int) i), sources[i], routes, values);
             layout |= previous != cards[i]->extraHeight();
         }
         if (layout) resized();
+        if (draggingUid.isNotEmpty() && view.getBounds().contains (dragPoint))
+        {
+            const int edge = dragPoint.y - view.getY();
+            const int delta = edge < 24 ? -9 : edge > view.getHeight() - 24 ? 9 : 0;
+            if (delta != 0)
+            { view.setViewPosition (0, view.getViewPositionY() + delta); dragRow (draggingUid, localPointToGlobal (dragPoint), false); }
+        }
         repaint();
     }
     void refresh()
     {
-        cards.clear(); revision = processor.getModulatorRevision();
+        // The mouse source keeps delivering events to the original output
+        // handle even when EditorContent temporarily hides this page.
+        if (outputDragging) return;
+        cards.clear(); rows.clear(); revision = processor.getModulatorRevision();
         const auto safe = juce::Component::SafePointer<ModulationPage> (this);
-        for (auto source : processor.getModulators())
+        const auto sources = processor.getModulators();
+        if (std::none_of (sources.begin(), sources.end(), [this] (const auto& source) { return source.uid == selectedUid; }))
+            selectedUid = sources.empty() ? juce::String {} : sources.front().uid;
+        for (const auto& source : sources)
         {
-            auto card = std::make_unique<ModulatorCard> (processor, std::move (source));
+            auto card = std::make_unique<ModulatorCard> (processor, source);
             card->removeSource = [safe] (const juce::String& uid)
             { juce::MessageManager::callAsync ([safe, uid] { if (safe) { safe->processor.removeModulator (uid); safe->refresh(); } }); };
             card->showMappings = [safe] (const juce::String& uid) { if (safe && safe->openMappings) safe->openMappings (uid); };
             card->mappingMenu = [safe] (auto& target, const auto& uid, const auto& parameter) { if (safe && safe->mappingMenu) safe->mappingMenu (target, uid, parameter); };
-            list.addAndMakeVisible (*card); cards.push_back (std::move (card));
+            card->dragOutput = [safe] (const auto& uid, auto screen, bool finish) { if (safe) safe->forwardOutputDrag (uid, screen, finish); };
+            details.addChildComponent (*card); cards.push_back (std::move (card));
+            auto row = std::make_unique<ModulatorRow> (source);
+            row->choose = [safe] (const auto& uid) { if (safe) safe->selectSource (uid); };
+            row->reorder = [safe] (const auto& uid, auto screen, bool finish) { if (safe) safe->dragRow (uid, screen, finish); };
+            row->dragOutput = [safe] (const auto& uid, auto screen, bool finish) { if (safe) safe->forwardOutputDrag (uid, screen, finish); };
+            list.addAndMakeVisible (*row); rows.push_back (std::move (row));
         }
-        addLFO.setEnabled (cards.size() < (size_t) scrr::params::maxModulators); addEnv.setEnabled (addLFO.isEnabled()); addRandom.setEnabled (addLFO.isEnabled()); resized(); repaint();
+        addLFO.setEnabled (cards.size() < (size_t) scrr::params::maxModulators); addEnv.setEnabled (addLFO.isEnabled()); addRandom.setEnabled (addLFO.isEnabled());
+        updateSelection(); resized(); repaint();
     }
     void resized() override
     {
-        close.setBounds (getWidth() - 110, 12, 96, 27);
-        addLFO.setBounds (14, 50, 100, 27); addEnv.setBounds (122, 50, 152, 27);
-        addRandom.setBounds (282, 50, 110, 27);
-        view.setBounds (14, 88, getWidth() - 28, juce::jmax (10, getHeight() - 102));
-        const int width = view.getWidth() - 14, columns = width >= 690 ? 2 : 1, cardWidth = (width - 10 * (columns - 1)) / columns;
-        const int cardHeight = juce::jlimit (292, 344, view.getHeight());
-        int y = 0;
-        for (size_t i = 0; i < cards.size(); i += (size_t) columns)
+        const int left = juce::jmin (230, getWidth() / 2);
+        close.setBounds (getWidth() - 108, 4, 100, 27);
+        addLFO.setBounds (0, 37, (left - 6) / 2, 28); addRandom.setBounds ((left + 6) / 2, 37, (left - 6) / 2, 28);
+        addEnv.setBounds (0, 71, left, 28);
+        view.setBounds (0, 140, left, juce::jmax (10, getHeight() - 140));
+        detailView.setBounds (left + 10, 41, juce::jmax (10, getWidth() - left - 10), juce::jmax (10, getHeight() - 41));
+        const int rowWidth = juce::jmax (100, view.getWidth() - view.getScrollBarThickness());
+        for (size_t i = 0; i < rows.size(); ++i) rows[i]->setBounds (0, (int) i * 56, rowWidth, 56);
+        list.setSize (rowWidth, juce::jmax (view.getHeight(), (int) rows.size() * 56));
+        const int cardWidth = juce::jmax (120, detailView.getWidth() - detailView.getScrollBarThickness());
+        int detailHeight = detailView.getHeight();
+        const auto sources = processor.getModulators();
+        for (size_t i = 0; i < cards.size(); ++i)
         {
-            int extra = 0;
-            for (size_t j = i; j < cards.size() && j < i + (size_t) columns; ++j) extra = juce::jmax (extra, cards[j]->extraHeight());
-            for (size_t j = i; j < cards.size() && j < i + (size_t) columns; ++j) cards[j]->setBounds ((int) (j - i) * (cardWidth + 10), y, cardWidth, cardHeight + extra);
-            y += cardHeight + extra + 10;
+            const bool random = i < sources.size() && sources[i].random;
+            const int height = juce::jmax (detailView.getHeight(), (random ? 370 : 338) + cards[i]->extraHeight());
+            cards[i]->setBounds (0, 0, cardWidth, height);
+            if (cards[i]->uid() == selectedUid) detailHeight = height;
         }
-        list.setSize (width, juce::jmax (view.getHeight(), y - 10));
+        details.setSize (cardWidth, detailHeight);
     }
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (Theme::black()); g.setColour (Theme::blue()); g.fillRect (0, 0, 4, getHeight());
-        Theme::text (g, "MODULATION / " + juce::String (cards.size()) + " SOURCES", { 14, 8, getWidth() - 136, 33 }, 22, Theme::white(), true);
-        Theme::text (g, "Assign from a parameter's right-click menu.", { 406, 50, getWidth() - 420, 27 }, 11, Theme::dim());
+        g.fillAll (Theme::black());
+        Theme::text (g, "MODULATION / " + juce::String (cards.size()), { 0, 0, 230, 31 }, 18, Theme::white(), true);
+        Theme::text (g, modulationHint ("Independent sources", u8"独立调制源"),
+                     { detailView.getX() + 8, 0, juce::jmax (0, detailView.getWidth() - 122), 31 }, 11, Theme::dim());
+        auto hint = juce::Rectangle<int> (0, 104, view.getWidth(), 32);
+        g.setFont (Theme::font (9)); g.setColour (Theme::dim());
+        g.drawFittedText (modulationHint ("Drag rows to reorder / right to delete.\nDrag OUTPUT onto an effect parameter.",
+                                         u8"拖动列表排序／拖到右侧删除。\n拖动 OUTPUT 到效果参数以映射。"), hint, juce::Justification::centredLeft, 2);
         if (cards.empty())
         {
-            Theme::text (g, "SET THE SIGNAL IN MOTION", { 28, 121, getWidth() - 56, 40 }, 28, Theme::yellow(), true);
-            Theme::text (g, "Add LFO, Envelope Follower or Random. Each source can modulate multiple parameters.", { 28, 174, getWidth() - 56, 48 }, 13, Theme::dim());
+            Theme::text (g, "SET THE SIGNAL IN MOTION", detailView.getBounds().reduced (18).withHeight (48), 20, Theme::yellow(), true);
+            g.setFont (Theme::font (12)); g.setColour (Theme::dim());
+            g.drawFittedText (modulationHint ("Add LFO, Audio Follower or Random.\nSelect a source to edit it. Each output can modulate multiple effect parameters.",
+                                             u8"添加 LFO、Audio Follower 或 Random。\n点击左侧调制源编辑详情；每个输出都可映射到多个效果参数。"),
+                              detailView.getBounds().reduced (18).withTrimmedTop (60), juce::Justification::topLeft, 5);
+        }
+    }
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (draggingUid.isEmpty()) return;
+        const auto target = deleteArea();
+        g.setColour (Theme::black().withAlpha (.80f)); g.fillRect (detailView.getBounds());
+        g.setColour (removeTarget ? Theme::red() : Theme::panel()); g.fillRect (target);
+        g.setColour (Theme::red()); g.drawRect (target, removeTarget ? 3 : 1);
+        Theme::text (g, modulationHint (removeTarget ? "RELEASE TO REMOVE SOURCE" : "DROP HERE TO REMOVE SOURCE",
+                                        removeTarget ? u8"松开以删除调制源" : u8"拖到此处以删除调制源"),
+                     target.reduced (12).withTrimmedBottom (32), 14, removeTarget ? Theme::black() : Theme::red(), true, juce::Justification::centred);
+        Theme::text (g, modulationHint ("Outside a target / Esc: cancel", u8"移出目标区域／Esc：取消"),
+                     target.reduced (12).withTrimmedTop (54), 10, removeTarget ? Theme::black() : Theme::dim(), false, juce::Justification::centred);
+        if (insertion >= 0)
+        {
+            const int y = juce::jlimit (view.getY() + 2, view.getBottom() - 3, view.getY() + insertion * 56 - view.getViewPositionY());
+            g.setColour (Theme::yellow()); g.fillRect (view.getX(), y - 2, view.getWidth(), 4);
         }
     }
 private:
+    void forwardOutputDrag (juce::String uid, juce::Point<int> screen, bool finish)
+    {
+        outputDragging = ! finish;
+        const auto callback = dragOutput; if (callback) callback (uid, screen, finish);
+    }
+    void addSource (bool follower, bool random)
+    {
+        const auto uid = processor.addModulator (follower, random); if (uid.isEmpty()) return;
+        selectedUid = uid; refresh(); view.setViewPosition (0, list.getHeight()); detailView.setViewPosition (0, 0);
+    }
+    void updateSelection()
+    {
+        const auto sources = processor.getModulators(); const auto values = processor.getModulationValues();
+        for (size_t i = 0; i < cards.size(); ++i)
+        {
+            cards[i]->setVisible (cards[i]->uid() == selectedUid);
+            if (i < sources.size()) rows[i]->update (sources[i], (int) i, sources[i].uid == selectedUid, values[i + 8]);
+        }
+    }
+    juce::Rectangle<int> deleteArea() const
+    { return detailView.getBounds().withSizeKeepingCentre (juce::jmax (80, juce::jmin (280, detailView.getWidth() - 28)), 112); }
+    void dragRow (const juce::String& uid, juce::Point<int> screen, bool finish)
+    {
+        if (uid == cancelledUid) { if (finish) cancelledUid.clear(); return; }
+        if (revision != processor.getModulatorRevision()) { cancelledUid = uid; cancelReorder(); return; }
+        if (draggingUid.isEmpty())
+        {
+            if (finish) return;
+            draggingUid = uid; setWantsKeyboardFocus (true); grabKeyboardFocus();
+            for (auto& row : rows) row->setDragged (row->uid() == uid);
+        }
+        dragPoint = getLocalPoint (nullptr, screen); removeTarget = deleteArea().contains (dragPoint);
+        insertion = view.getBounds().contains (dragPoint)
+            ? juce::jlimit (0, (int) rows.size(), (dragPoint.y - view.getY() + view.getViewPositionY() + 28) / 56) : -1;
+        if (finish)
+        {
+            const bool remove = removeTarget; const int slot = insertion; const juce::String moved = uid;
+            cancelReorder(); const auto safe = juce::Component::SafePointer<ModulationPage> (this);
+            juce::MessageManager::callAsync ([safe, moved, slot, remove]
+            {
+                if (! safe) return;
+                if (remove) safe->processor.removeModulator (moved);
+                else if (slot >= 0) safe->processor.moveModulator (moved, slot);
+                else return;
+                safe->refresh();
+            });
+        }
+        repaint();
+    }
     SpectralCrrptProcessor& processor; uint64_t revision {};
-    juce::TextButton addLFO { "+ LFO" }, addEnv { "+ ENVELOPE" }, addRandom { "+ RANDOM" }, close { "EFFECTS >" };
-    juce::Viewport view; juce::Component list; std::vector<std::unique_ptr<ModulatorCard>> cards;
+    juce::TextButton addLFO { "+ LFO" }, addEnv { "+ AUDIO FOLLOWER" }, addRandom { "+ RANDOM" }, close { "EFFECTS >" };
+    juce::Viewport view, detailView; juce::Component list, details;
+    std::vector<std::unique_ptr<ModulatorCard>> cards;
+    std::vector<std::unique_ptr<ModulatorRow>> rows;
+    juce::String selectedUid, draggingUid, cancelledUid;
+    juce::Point<int> dragPoint; int insertion { -1 }; bool removeTarget {}, outputDragging {};
 };
 }

@@ -25,6 +25,10 @@ jobs:
       - name: Test
         run: ctest --test-dir Builds/mac-release --output-on-failure
 
+      - name: Test installer path and preference handling
+        if: github.repository == 'Dirty-Octopus/spectral-corruptor'
+        run: python3 -m unittest discover -s tests -p test_installers.py -v
+
       - name: Verify Universal architecture and macOS minimum version
         run: |
           python3 - <<'PYVERIFY'
@@ -51,18 +55,21 @@ jobs:
           cp -R Builds/mac-release/SpectralCrrpt_artefacts/Release/VST3/*.vst3 Builds/release-stage/
           cp -R Builds/mac-release/SpectralCrrpt_artefacts/Release/AU/*.component Builds/release-stage/
           cp -R Builds/mac-release/SpectralCrrpt_artefacts/Release/Standalone/*.app Builds/release-stage/
+          cp docs/manual/Spectral_Corruptor_Manual_EN.pdf docs/manual/Spectral_Corruptor_Manual_ZH.pdf Builds/release-stage/
           ditto -c -k --norsrc Builds/release-stage Builds/release-packages/SpectralCorruptor-macOS.zip
           python3 tools/package_macos.py
 
-      - name: Verify macOS installer payload
+      - name: Verify macOS installer components
         if: github.repository == 'Dirty-Octopus/spectral-corruptor'
         run: |
           pkgutil --expand-full Builds/release-packages/SpectralCorruptor-macOS.pkg Builds/pkg-inspect
-          test -f 'Builds/pkg-inspect/Payload/Library/Audio/Plug-Ins/VST3/Spectral Corruptor.vst3/Contents/Info.plist'
-          test -f 'Builds/pkg-inspect/Payload/Library/Audio/Plug-Ins/Components/Spectral Corruptor.component/Contents/Info.plist'
-          test -f 'Builds/pkg-inspect/Payload/Applications/Spectral Corruptor.app/Contents/Info.plist'
+          test -f 'Builds/pkg-inspect/vst3.pkg/Scripts/payload/Spectral Corruptor.vst3/Contents/Info.plist'
+          test -f 'Builds/pkg-inspect/au.pkg/Scripts/payload/Spectral Corruptor.component/Contents/Info.plist'
+          test -f 'Builds/pkg-inspect/standalone.pkg/Scripts/payload/Spectral Corruptor.app/Contents/Info.plist'
+          test -f 'Builds/pkg-inspect/manualen.pkg/Scripts/payload/Spectral_Corruptor_Manual_EN.pdf'
+          test -f 'Builds/pkg-inspect/manualzh.pkg/Scripts/payload/Spectral_Corruptor_Manual_ZH.pdf'
 
-      - name: Verify macOS install and upgrade
+      - name: Verify macOS custom installation and remembered upgrade
         if: github.repository == 'Dirty-Octopus/spectral-corruptor'
         run: |
           target='/Library/Audio/Plug-Ins/VST3/Spectral Corruptor.vst3'
@@ -70,20 +77,39 @@ jobs:
           source='Builds/mac-release/SpectralCrrpt_artefacts/Release/VST3/Spectral Corruptor.vst3'
           sudo mkdir -p "$target/Contents"
           sudo cp "$source/Contents/Info.plist" "$target/Contents/Info.plist"
-          sudo /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 0.1.1' "$target/Contents/Info.plist"
-          sudo /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.1.1' "$target/Contents/Info.plist"
           sudo touch "$target/obsolete-version-marker.txt"
           mkdir -p "$user_target/Contents"
           cp "$source/Contents/Info.plist" "$user_target/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 0.1.1' "$user_target/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.1.1' "$user_target/Contents/Info.plist"
           touch "$user_target/obsolete-version-marker.txt"
-          for attempt in 1 2; do
-            sudo installer -pkg Builds/release-packages/SpectralCorruptor-macOS.pkg -target /
+          python3 - <<'PYCHOICES'
+          import os, plistlib
+          from pathlib import Path
+          base = Path(os.environ['RUNNER_TEMP']) / 'Spectral custom components'
+          changes = []
+          for key in ('vst3', 'au', 'standalone', 'manualen', 'manualzh'):
+              path = base / key
+              path.mkdir(parents=True, exist_ok=True)
+              changes += [{'choiceIdentifier': key, 'choiceAttribute': 'selected', 'attributeSetting': int(key in ('vst3', 'standalone', 'manualen'))},
+                          {'choiceIdentifier': key, 'choiceAttribute': 'customLocation', 'attributeSetting': str(path)}]
+          Path('Builds/custom-choices.plist').write_bytes(plistlib.dumps(changes))
+          PYCHOICES
+          for attempt in 1 2 3; do
+            if [ "$attempt" = 1 ]; then
+              sudo installer -pkg Builds/release-packages/SpectralCorruptor-macOS.pkg -target / -applyChoiceChangesXML Builds/custom-choices.plist
+            elif [ "$attempt" = 2 ]; then
+              sudo installer -pkg Builds/release-packages/SpectralCorruptor-macOS.pkg -target /
+            else
+              sudo installer -pkg Builds/release-packages/SpectralCorruptor-macOS.pkg -target / -applyChoiceChangesXML '/Library/Application Support/SpectralCorruptor/Installer/choices.plist'
+            fi
             cmp "$source/Contents/MacOS/Spectral Corruptor" "$target/Contents/MacOS/Spectral Corruptor"
             cmp "$source/Contents/MacOS/Spectral Corruptor" "$user_target/Contents/MacOS/Spectral Corruptor"
-            if [ -e "$target/obsolete-version-marker.txt" ]; then echo 'System bundle was not replaced'; exit 1; fi
-            if [ -e "$user_target/obsolete-version-marker.txt" ]; then echo 'User bundle was not replaced'; exit 1; fi
+            cmp "$source/Contents/MacOS/Spectral Corruptor" "$RUNNER_TEMP/Spectral custom components/vst3/Spectral Corruptor.vst3/Contents/MacOS/Spectral Corruptor"
+            cmp 'Builds/mac-release/SpectralCrrpt_artefacts/Release/Standalone/Spectral Corruptor.app/Contents/MacOS/Spectral Corruptor' "$RUNNER_TEMP/Spectral custom components/standalone/Spectral Corruptor.app/Contents/MacOS/Spectral Corruptor"
+            cmp docs/manual/Spectral_Corruptor_Manual_EN.pdf "$RUNNER_TEMP/Spectral custom components/manualen/Spectral_Corruptor_Manual_EN.pdf"
+            test ! -e "$RUNNER_TEMP/Spectral custom components/au/Spectral Corruptor.component"
+            test ! -e "$RUNNER_TEMP/Spectral custom components/manualzh/Spectral_Corruptor_Manual_ZH.pdf"
+            test ! -e "$target/obsolete-version-marker.txt"
+            test ! -e "$user_target/obsolete-version-marker.txt"
           done
 
       - name: Upload official macOS package
@@ -113,7 +139,7 @@ jobs:
           path: Builds/mac-release/SpectralCrrpt_artefacts/Release/Standalone/*
 
   build-windows:
-    name: Windows (VST3)
+    name: Windows (VST3 + Standalone)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -145,7 +171,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force Builds/release-packages
-          Compress-Archive -Path Builds/win-release/SpectralCrrpt_artefacts/Release/VST3/*.vst3 -DestinationPath Builds/release-packages/SpectralCorruptor-Windows.zip
+          New-Item -ItemType Directory -Force Builds/windows-release-stage
+          Copy-Item 'Builds/win-release/SpectralCrrpt_artefacts/Release/VST3/*.vst3' Builds/windows-release-stage -Recurse
+          Copy-Item 'Builds/win-release/SpectralCrrpt_artefacts/Release/Standalone/Spectral Corruptor.exe' Builds/windows-release-stage
+          Copy-Item 'docs/manual/Spectral_Corruptor_Manual_*.pdf' Builds/windows-release-stage
+          Compress-Archive -Path Builds/windows-release-stage/* -DestinationPath Builds/release-packages/SpectralCorruptor-Windows.zip
 
       - name: Build Windows installer
         if: github.repository == 'Dirty-Octopus/spectral-corruptor'
@@ -157,26 +187,36 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Could not install Inno Setup' }
           }
           $version = [regex]::Match((Get-Content CMakeLists.txt -Raw), 'project\(SpectralCrrpt\s+VERSION ([0-9.]+)').Groups[1].Value
-          $payload = (Resolve-Path Builds/win-release/SpectralCrrpt_artefacts/Release/VST3).Path
+          $payload = (Resolve-Path Builds/win-release/SpectralCrrpt_artefacts/Release).Path
+          $manuals = (Resolve-Path docs/manual).Path
           $output = (Resolve-Path Builds/release-packages).Path
-          & $compiler "/DPluginVersion=$version" "/DPayloadRoot=$payload" "/DOutputRoot=$output" tools/windows-installer.iss
+          & $compiler "/DPluginVersion=$version" "/DPayloadRoot=$payload" "/DManualRoot=$manuals" "/DOutputRoot=$output" tools/windows-installer.iss
           if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
 
-      - name: Verify Windows install and upgrade
+      - name: Verify Windows components, custom paths and remembered upgrade
         if: github.repository == 'Dirty-Octopus/spectral-corruptor'
         shell: pwsh
         run: |
           $target = "$env:CommonProgramFiles\VST3\Spectral Corruptor.vst3"
-          New-Item -ItemType Directory -Force $target | Out-Null
-          Set-Content "$target\obsolete-version-marker.txt" 'old installation'
           $source = Get-ChildItem 'Builds/win-release/SpectralCrrpt_artefacts/Release/VST3/Spectral Corruptor.vst3/Contents/x86_64-win/*.vst3' | Select-Object -First 1
+          New-Item -ItemType Directory -Force "$target\Contents\x86_64-win" | Out-Null
+          Copy-Item $source.FullName "$target\Contents\x86_64-win\$($source.Name)"
+          Set-Content "$target\obsolete-version-marker.txt" 'old installation'
+          $base = "$env:RUNNER_TEMP\Spectral custom components"
           $installer = (Resolve-Path Builds/release-packages/SpectralCorruptor-Windows-Setup.exe).Path
+          $silent = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+          $custom = "$silent /COMPONENTS=`"vst3,standalone,manualen`" /VST3DIR=`"$base\vst3`" /STANDALONEDIR=`"$base\standalone`" /MANUALENDIR=`"$base\manualen`" /MANUALZHDIR=`"$base\manualzh`""
           foreach ($attempt in 1..2) {
-            $process = Start-Process $installer -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+            $arguments = if ($attempt -eq 1) { $custom } else { $silent }
+            $process = Start-Process $installer -ArgumentList $arguments -Wait -PassThru
             if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
             if (Test-Path "$target\obsolete-version-marker.txt") { throw 'Old bundle was not replaced' }
-            $installed = "$target\Contents\x86_64-win\$($source.Name)"
-            if ((Get-FileHash $installed).Hash -ne (Get-FileHash $source.FullName).Hash) { throw 'Installed plugin differs from build' }
+            foreach ($installed in @("$target\Contents\x86_64-win\$($source.Name)", "$base\vst3\Spectral Corruptor.vst3\Contents\x86_64-win\$($source.Name)")) {
+              if ((Get-FileHash $installed).Hash -ne (Get-FileHash $source.FullName).Hash) { throw 'Installed plugin differs from build' }
+            }
+            if ((Get-FileHash "$base\standalone\Spectral Corruptor.exe").Hash -ne (Get-FileHash 'Builds/win-release/SpectralCrrpt_artefacts/Release/Standalone/Spectral Corruptor.exe').Hash) { throw 'Standalone differs from build' }
+            if ((Get-FileHash "$base\manualen\Spectral_Corruptor_Manual_EN.pdf").Hash -ne (Get-FileHash docs/manual/Spectral_Corruptor_Manual_EN.pdf).Hash) { throw 'Manual differs from source' }
+            if (Test-Path "$base\manualzh\Spectral_Corruptor_Manual_ZH.pdf") { throw 'Unselected Chinese manual was installed' }
           }
 
       - name: Upload official Windows package

@@ -14,7 +14,7 @@ inline juce::String effectFolder (const juce::String& type)
     if (type.startsWith ("Frequency") || type == "SpectralMirror" || type == "BinTeleport") return "FREQUENCY";
     if (type.contains ("Phase") || type == "ComplexRotation" || type == "SpectralDispersion") return "PHASE";
     if (type.contains ("Hold") || type == "TemporalSmear" || type == "TimeDesync" || type == "SpectralBloom") return "TEXTURE / TIME";
-    if (type == "Utility" || type == "SpectralFilter" || type == "SpectralComb") return "FILTER / UTILITY";
+    if (type == "Utility" || type == "SpectralFilter" || type == "SpectralComb" || type == "SpectralEqualizer") return "FILTER / UTILITY";
     return "DESTRUCTION";
 }
 inline juce::String effectMotto (const juce::String& type)
@@ -48,6 +48,8 @@ inline juce::String effectMotto (const juce::String& type)
     if (type == "MagnitudePhaseSwap") return "EXCHANGE THE DIMENSIONS";
     if (type == "SpectralDispersion") return "EVERY PARTIAL TAKES ITS TIME";
     if (type == "SpectralFilter") return "SHAPE WHAT GETS THROUGH";
+    if (type == "SpectralClipper") return "SET A CEILING FOR EVERY PARTIAL";
+    if (type == "SpectralEqualizer") return "EIGHT POINTS. ONE SPECTRUM.";
     return "TAKE CONTROL OF THE SIGNAL";
 }
 inline juce::Colour effectColour (const juce::String& type)
