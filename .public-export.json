@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_commit": "5a9ba3ec9f01194290c36be217c9a23344ec93af",
+  "source_commit": "99cce6305463b5e9c6790dca2d87c8f3b4cd9706",
   "working_tree_preview": false,
   "juce_commit": "51d11a2be6d5c97ccf12b4e5e827006e19f0555a",
   "files": {
@@ -70,7 +70,7 @@
     "Source/gui/UiScale.h": "a7bc1bb47f417bba5711d568088ccc37550b1b212ba3c8affeb70e04e8e43995",
     "Source/gui/components/CurveCoordinateMenu.h": "93dc03a6bdc5af2ae5c2f5b8ef0acebf52bf1c41cf399b5fc0a80f3040212c0f",
     "Source/gui/components/ParameterPanel.h": "9164750a31cfbb7cf750c5fdee9ff38014fc87f57a28d861e4c2f9c2a2b73217",
-    "Source/gui/components/RemapFormulaEditor.h": "e4f67ef934fb99aca1eca36e621e2762d1d6cb4a9777f04ad093c6f781ea67b8",
+    "Source/gui/components/RemapFormulaEditor.h": "aaf167d44ae5fc8d7462f596093f3c15e24cee103997bef73755d520e89fe6f6",
     "Source/gui/components/SpectralButton.cpp": "e7d35b1f7717d3497bd46ff1dfc36344955094589f33437ef5bb5687a2c592b6",
     "Source/gui/components/SpectralButton.h": "dc5687ab7a52cc0c0bfd42a9a803379928e51507a55b2be0ff207dbbd9af0492",
     "Source/gui/components/SpectralKnob.cpp": "2b96cbfede5abf9c868ed357faa3bb982147746748b503ca772cebbeb6fd2781",
@@ -153,7 +153,7 @@
     "tests/PresetRecoveryTests.h": "f7180f93e2142db8d9893ca94d642bc3c1528b85ee5a81d179743a8f42fc5b74",
     "tests/PublicBuildTests.cpp": "c55ad5261a7e5337b8d7ceb4d8685c5ffbc04da14e76f1d7d90f184888be4f80",
     "tests/RandomPresetTests.h": "90ec9e86c970df884ddda994025db1120f232bd0ba566d02e07265a7a1af3987",
-    "tests/RemapFormulaUiTests.h": "58a14618a24d8f310e14e41043cebe364de558ff2402c277eb0f3ae44f77c66b",
+    "tests/RemapFormulaUiTests.h": "f29eda11ea7babb122a7e317d2775056ada95a40a6fb42de9f8ffeffa04b97af",
     "tests/SettingsUpdateTests.h": "144b38436c400873ad9a7b7bad64d4ec8f00a3756efd81aa315b91aadbc77070",
     "tests/SpectralUpgradeTests.h": "7dbd18603bb4f11b42ae73ae0fc0029e0f098fdc512e3753cf5f50b0e23a6ffd",
     "tests/SpectralUpgradeUiTests.h": "048ea0651d4f8af2f4aa5098ff817dc8d59714501b51dc5573d820c30ffbdc41",

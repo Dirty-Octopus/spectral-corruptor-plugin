@@ -307,12 +307,12 @@ class RemapFormulaEditor : public juce::Component
         }
         bool hitWire (juce::Point<float> point, Edge& edge) const
         {
-            auto near = [&] (juce::Point<float> from, juce::Point<float> to)
+            auto containsWire = [&] (juce::Point<float> from, juce::Point<float> to)
             { juce::Path stroke; juce::PathStrokeType ((float) (12 / owner.view.zoom)).createStrokedPath (stroke, wirePath (from, to)); return stroke.contains (point); };
             for (const auto& node : owner.graph.nodes) for (int pin = 0; pin < scrr::params::formulaOpArity (node.op); ++pin)
-                if (const auto* source = owner.findNode (node.inputs[(size_t) pin]); source && near (outputFor (*source), inputFor (node, pin)))
+                if (const auto* source = owner.findNode (node.inputs[(size_t) pin]); source && containsWire (outputFor (*source), inputFor (node, pin)))
                 { edge = { source->id, node.id, pin }; return true; }
-            if (const auto* source = owner.findNode (owner.graph.outputNode); source && near (outputFor (*source), outputInput()))
+            if (const auto* source = owner.findNode (owner.graph.outputNode); source && containsWire (outputFor (*source), outputInput()))
             { edge = { source->id, -1, 0 }; return true; }
             return false;
         }

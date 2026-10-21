@@ -39,17 +39,31 @@ inline void foreground (juce::Component& component)
     }
     REQUIRE (ready);
 }
-inline juce::Component* activeMenu()
+inline juce::Component* activeMenu (int requestedResult = 0)
 {
     juce::Component* popup = nullptr;
-    REQUIRE (waitForUI ([&]
+    const auto initialModals = juce::Component::getNumCurrentlyModalComponents();
+    const auto findPopup = [&]
     {
         for (int i = 0; i < juce::Component::getNumCurrentlyModalComponents(); ++i)
             if (auto* component = juce::Component::getCurrentlyModalComponent (i))
                 if (auto* handler = component->getAccessibilityHandler())
-                    if (handler->getRole() == juce::AccessibilityRole::popupMenu) { popup = component; return true; }
+                    if (handler->getRole() == juce::AccessibilityRole::popupMenu && component->isShowing()) { popup = component; return true; }
         return false;
-    }));
+    };
+    // showMenuAsync enters modality synchronously. Re-pumping the native loop
+    // after inspecting an already open menu can let unrelated focus events
+    // dismiss it before chooseMenu selects the item in this synthetic gesture.
+    const bool appeared = findPopup() || waitForUI (findPopup);
+    if (! appeared)
+    {
+        const auto* focused = juce::Component::getCurrentlyFocusedComponent();
+        std::cerr << "Formula popup timeout: result=" << requestedResult << " initialModals=" << initialModals
+                  << " currentModals=" << juce::Component::getNumCurrentlyModalComponents()
+                  << " foreground=" << juce::Process::isForegroundProcess()
+                  << " focus=" << (focused ? focused->getComponentID().toStdString() : "none") << '\n';
+    }
+    REQUIRE (appeared);
     return popup;
 }
 inline bool menuContains (juce::Component& menu, const juce::String& title)
@@ -60,15 +74,30 @@ inline bool menuContains (juce::Component& menu, const juce::String& title)
 }
 inline void chooseMenu (int result)
 {
-    juce::Component::SafePointer<juce::Component> menu (activeMenu()); REQUIRE (menu != nullptr);
+    juce::Component::SafePointer<juce::Component> menu (activeMenu (result)); REQUIRE (menu != nullptr);
     menu->exitModalState (result);
     // Editing an inline numeric value can legitimately start a second modal
     // text editor as the popup closes. Wait only for this popup to finish.
     REQUIRE (waitForUI ([&] { return menu == nullptr || ! menu->isCurrentlyModal (false); }));
 }
+inline void finishInlineEditBeforePointerInput (juce::Component& target)
+{
+    // Direct mouseDown calls bypass JUCE's normal modal-input dispatch. A
+    // slider's inline Label must commit its edit before a click elsewhere can
+    // open another menu, just as Label::inputAttemptWhenModal does natively.
+    auto* modal = juce::Component::getCurrentlyModalComponent();
+    if (auto* label = dynamic_cast<juce::Label*> (modal);
+        label != nullptr && label->isBeingEdited() && target.isCurrentlyBlockedByAnotherModalComponent())
+    {
+        juce::Component::SafePointer<juce::Label> editing (label);
+        modal->inputAttemptWhenModal();
+        REQUIRE (waitForUI ([&] { return editing == nullptr || (! editing->isBeingEdited() && ! editing->isCurrentlyModal (false)); }));
+    }
+}
 inline void click (scrr::gui::RemapFormulaEditor& editor, juce::Point<float> position, bool popup = false)
 {
     auto* canvas = findID (editor, "formula-canvas"); REQUIRE (canvas != nullptr);
+    finishInlineEditBeforePointerInput (*canvas);
     const auto mods = popup ? juce::ModifierKeys::rightButtonModifier : juce::ModifierKeys::leftButtonModifier;
     canvas->mouseDown (mouse (*canvas, position, false, mods));
     if (! popup) canvas->mouseUp (mouse (*canvas, position, false, mods));
@@ -81,6 +110,7 @@ inline void nodeMenu (scrr::gui::RemapFormulaEditor& editor, int id)
 inline void editText (juce::Component& root, const char* id, const char* value)
 {
     auto* field = dynamic_cast<juce::TextEditor*> (findID (root, id)); REQUIRE (field != nullptr);
+    finishInlineEditBeforePointerInput (*field);
     field->setText (value, false); field->onReturnKey();
 }
 inline void pressToolbar (juce::Component& root, const char* id)
@@ -214,6 +244,7 @@ TEST_CASE ("Formula inline parameters retain stable mapping IDs through node Det
     auto* canvas = findID (f.editor, "formula-canvas"); REQUIRE (canvas != nullptr); REQUIRE (canvas->isParentOf (sliders.front()));
     juce::Identifier mapped;
     f.editor.mappingMenu = [&] (juce::Component& target, const juce::Identifier& key) { REQUIRE (&target == sliders.front()); mapped = key; };
+    finishInlineEditBeforePointerInput (*sliders.front());
     sliders.front()->mouseDown (mouse (*sliders.front(), { 10, 10 }, false, juce::ModifierKeys::rightButtonModifier)); REQUIRE (mapped == property);
     nodeMenu (f.editor, parameterNode); chooseMenu (1001);
     editText (f.editor, "formula-param-name", "Offset"); editText (f.editor, "formula-param-max", "2"); editText (f.editor, "formula-param-step", "0.25");
@@ -222,7 +253,9 @@ TEST_CASE ("Formula inline parameters retain stable mapping IDs through node Det
     sliders = f.editor.getParameterSliders(); REQUIRE (sliders.size() == 1);
     sliders.front()->setValue (1.25, juce::sendNotificationSync); REQUIRE (std::abs ((double) f.state[property] - 1.25) < .001);
     REQUIRE (changes >= 4);
-    click (f.editor, { 720, 380 }, true); chooseMenu (100);
+    const juce::Point<float> blank { (float) canvas->getWidth() - 30, (float) canvas->getHeight() - 30 };
+    REQUIRE (canvas->getLocalBounds().toFloat().contains (blank));
+    click (f.editor, blank, true); chooseMenu (100);
     graph = f.graph(); REQUIRE (graph.nodes.size() == 3); REQUIRE (graph.parameters.size() == 1);
     REQUIRE (graph.nodes.back().parameterId == graph.parameters.front().id);
     nodeMenu (f.editor, parameterNode); chooseMenu (1004);
