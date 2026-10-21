@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_commit": "99cce6305463b5e9c6790dca2d87c8f3b4cd9706",
+  "source_commit": "4fdc98ad2c09d5ec56b2ba0356713eae56a2b37f",
   "working_tree_preview": false,
   "juce_commit": "51d11a2be6d5c97ccf12b4e5e827006e19f0555a",
   "files": {
@@ -145,7 +145,7 @@
     "tests/DspFoundationTests.cpp": "f072b037fc19ce6f9f8fa04d55b189f77be5c45391f6d44a9c81b42e5f63193e",
     "tests/EffectArtworkMotionTests.h": "c2854ef91888aae6a98fc5a6b9d5d967341ad008424ee3168511ffe479f207a7",
     "tests/FormulaRoutingTests.h": "5975c108d51cca253e3d5a3095bacd8360ff1df6df2eefedc2461543809a2e94",
-    "tests/FrequencyRemapTests.cpp": "28b73d52548229c8e45e4e76c5b1bb3d0cb34138db61dbdd1a0f7f0b22131e2b",
+    "tests/FrequencyRemapTests.cpp": "77a13cc1afb197fd6913f606db6d0af98e3c676b54392437bf7bf2b9dde60c6c",
     "tests/MappingCurveTests.h": "fbaebf2e1d77aee4e4190583602e095928a73406f13e7d68b7064cdad06570fe",
     "tests/ModulationUxTests.h": "08e0f366a3ac80e50c7e7f7c7a1f34c22a6f950dd5eca240edede0da569e1362",
     "tests/PartialProcessorTests.cpp": "6231c8afd40a25a1beff39070c4399bcd04668864e35abc313c9581d5ea6d2dd",

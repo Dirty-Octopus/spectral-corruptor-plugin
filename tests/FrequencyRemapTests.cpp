@@ -712,7 +712,7 @@ TEST_CASE ("Frequency Remap renders a descending curve with independently moved 
     constexpr int size = 2048, hop = 293, samples = 32768;
     FFTEngine fft; fft.configure (size, hop, WindowType::Hann); fft.prepare (rate, 257, 1);
     FrequencyRemapModule module; module.prepare (rate, fft.getNumBins()); module.setHopSize (hop); module.setFrequencyLimit (limit);
-    auto coordinate = [] (double hz) { return (float) (std::log (hz / 20.0) / std::log (limit / 20.0)); };
+    auto coordinate = [frequencyLimit = limit] (double hz) { return (float) (std::log (hz / 20.0) / std::log (frequencyLimit / 20.0)); };
     scrr::params::TransferCurve curve;
     curve.points = { {0, 0, 0}, {coordinate (200), coordinate (800), 0},
                      {coordinate (1000), coordinate (500), 0}, {1, 1, 0} };
