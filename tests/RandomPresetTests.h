@@ -202,3 +202,213 @@ TEST_CASE ("Random presets render finite bounded stereo audio with unchanged mas
         REQUIRE (std::abs (p->getAPVTS().getRawParameterValue (scrr::params::id::outputGain)->load()) < .001f);
     }
 }
+
+TEST_CASE ("Preset reset baseline uses physical globals Macros and stable module identities")
+{
+    using namespace scrr::params;
+    auto p = testProcessor(); p->addModule (1, "FrequencyShift");
+    const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString();
+    p->setModuleParameter (1, uid, "shift", 320.0);
+    setParam (*p, id::inputGain, -9); setParam (*p, id::outputGain, -3); setParam (*p, id::overlapFactor, 7.25f); setParam (*p, id::macros[0], 41);
+    const auto sound = p->copyPresetState(); p->capturePresetResetBaseline();
+    REQUIRE (p->copyPresetState().isEquivalentTo (sound));
+    REQUIRE (! p->copyPresetState().getChildWithName ("presetResetBaseline").isValid());
+    p->setModuleParameter (1, uid, "shift", -110.0); setParam (*p, id::inputGain, -4); setParam (*p, id::macros[0], 73);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) + 9) < .001);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::outputGain, 0) + 3) < .001);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::overlapFactor, 4) - 7.25) < .001);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::macros[0], 0) - 41) < .001);
+    REQUIRE (std::abs (p->getModuleResetValue (1, uid, "shift", 0) - 320) < .001);
+    REQUIRE (p->transferModule (1, uid, 3, 0, false) == uid);
+    REQUIRE (std::abs (p->getModuleResetValue (3, uid, "shift", 0) - 320) < .001);
+    p->addModule (1, "FrequencyShift"); const auto added = p->getModuleChain (1).getChild (0)["uid"].toString();
+    p->setModuleParameter (1, added, "shift", 100.0);
+    REQUIRE (std::abs (p->getModuleResetValue (1, added, "shift", 0)) < .001);
+    REQUIRE (std::abs (p->getGlobalResetValue ("unknown.parameter", 123) - 123) < .001);
+    // A successful save calls this same explicit boundary; temporary edits do not.
+    p->capturePresetResetBaseline();
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) + 4) < .001);
+    REQUIRE (std::abs (p->getModuleResetValue (3, uid, "shift", 0) + 110) < .001);
+}
+
+TEST_CASE ("Preset reset baseline switches with loaded and random presets through Undo Redo")
+{
+    using namespace scrr::params;
+    auto p = testProcessor(); p->addModule (1, "FrequencyShift");
+    const auto originalUid = p->getModuleChain (1).getChild (0)["uid"].toString();
+    p->setModuleParameter (1, originalUid, "shift", 320.0); setParam (*p, id::inputGain, -9); p->capturePresetResetBaseline();
+    p->setModuleParameter (1, originalUid, "shift", 500.0); setParam (*p, id::inputGain, -4);
+    const auto before = p->copyPresetState();
+    auto target = testProcessor(); target->addModule (1, "FrequencyShift");
+    target->setModuleParameter (1, target->getModuleChain (1).getChild (0)["uid"].toString(), "shift", 80.0);
+    setParam (*target, id::inputGain, -2);
+    REQUIRE (p->switchPreset (target->copyPresetState(), "Target", true));
+    const auto loadedUid = p->getModuleChain (1).getChild (0)["uid"].toString();
+    REQUIRE (std::abs (p->getModuleResetValue (1, loadedUid, "shift", 0) - 80) < .001);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) + 2) < .001);
+    REQUIRE (p->undo()); REQUIRE (p->copyPresetState().isEquivalentTo (before));
+    REQUIRE (std::abs (p->getModuleResetValue (1, originalUid, "shift", 0) - 320) < .001);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) + 9) < .001);
+    REQUIRE (p->redo()); REQUIRE (std::abs (p->getModuleResetValue (1, loadedUid, "shift", 0) - 80) < .001);
+    REQUIRE (p->restorePresetRecovery());
+    const auto recoveredUid = p->getModuleChain (1).getChild (0)["uid"].toString();
+    REQUIRE (std::abs ((double) p->getModuleChain (1).getChild (0)["shift"] - 500) < .001);
+    REQUIRE (std::abs (p->getModuleResetValue (1, recoveredUid, "shift", 0) - 320) < .001);
+    const auto recovered = p->copyPresetState();
+    REQUIRE (p->randomizePreset (6, 89125));
+    const auto generated = p->copyPresetState();
+    for (int ch = 1; ch <= 4; ++ch) for (auto module : p->getModuleChain (ch))
+        if (const auto* spec = scrr::dsp::findModuleSpec (module["type"].toString()))
+            for (const auto& parameter : spec->params)
+                REQUIRE (std::abs (p->getModuleResetValue (ch, module["uid"].toString(), parameter.id, -9876) - (double) module[parameter.id]) < .001);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) + 4) < .001);
+    REQUIRE (p->undo()); REQUIRE (p->copyPresetState().isEquivalentTo (recovered));
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) + 9) < .001);
+    REQUIRE (p->redo()); REQUIRE (p->copyPresetState().isEquivalentTo (generated));
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) + 4) < .001);
+}
+
+TEST_CASE ("Preset reset baseline survives dirty host restore with Formula and source values")
+{
+    using namespace scrr::params;
+    auto p = testProcessor(); p->addModule (1, "FrequencyRemap");
+    const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString();
+    RemapFormula formula; FormulaParameter parameter; parameter.id = "baseline_ratio"; parameter.name = "Ratio";
+    parameter.minimum = 1; parameter.maximum = 8; parameter.defaultValue = 2; formula.parameters.push_back (parameter);
+    p->setModuleParameter (1, uid, "remapFormula", formula.encode()); p->setModuleParameter (1, uid, parameter.property(), 3.0);
+    const auto sourceId = p->addModulator (false); auto source = p->getModulators().front(); source.rate = 3.5f; source.phase = 83; p->updateModulator (source);
+    setParam (*p, id::inputGain, -8); setParam (*p, id::macros[2], 37); p->capturePresetResetBaseline();
+    p->setModuleParameter (1, uid, parameter.property(), 6.0); source.rate = 7; source.phase = 190; p->updateModulator (source);
+    setParam (*p, id::inputGain, -1); setParam (*p, id::macros[2], 92);
+    juce::MemoryBlock host; p->getStateInformation (host);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (host.getData(), (int) host.getSize()); REQUIRE (xml != nullptr);
+    REQUIRE (juce::ValueTree::fromXml (*xml).getChildWithName ("presetResetBaseline").isValid());
+    auto restored = testProcessor(); restored->setStateInformation (host.getData(), (int) host.getSize());
+    const auto newUid = restored->getModuleChain (1).getChild (0)["uid"].toString();
+    REQUIRE (std::abs (restored->getGlobalResetValue (id::inputGain, 0) + 8) < .001);
+    REQUIRE (std::abs (restored->getGlobalResetValue (id::macros[2], 0) - 37) < .001);
+    REQUIRE (std::abs (restored->getModuleResetValue (1, newUid, parameter.property(), 2) - 3) < .001);
+    REQUIRE (std::abs ((double) restored->getModuleChain (1).getChild (0)[parameter.property()] - 6) < .001);
+    REQUIRE (std::abs (restored->getModuleResetValue (MacroMapping::modulationChannel, sourceId, "rate", 1) - 3.5) < .001);
+    REQUIRE (std::abs (restored->getModuleResetValue (MacroMapping::modulationChannel, sourceId, "phase", 0) - 83) < .001);
+    REQUIRE (! restored->copyPresetState().getChildWithName ("presetResetBaseline").isValid());
+    // A preset file starts a new baseline from its sound, never from host metadata.
+    REQUIRE (restored->applyPreset (juce::ValueTree::fromXml (*xml)));
+    const auto importedUid = restored->getModuleChain (1).getChild (0)["uid"].toString();
+    REQUIRE (std::abs (restored->getModuleResetValue (1, importedUid, parameter.property(), 2) - 6) < .001);
+    REQUIRE (std::abs (restored->getGlobalResetValue (id::inputGain, 0) + 1) < .001);
+}
+
+TEST_CASE ("Preset reset baseline missing legacy metadata distinguishes dirty and clean projects")
+{
+    using namespace scrr::params;
+    auto p = testProcessor(); p->addModule (1, "FrequencyShift");
+    p->setModuleParameter (1, p->getModuleChain (1).getChild (0)["uid"].toString(), "shift", 700.0);
+    setParam (*p, id::inputGain, -6); setParam (*p, id::macros[0], 70);
+    auto legacy = p->copyPresetState(); REQUIRE (! legacy.getChildWithName ("presetResetBaseline").isValid());
+    for (bool dirty : { true, false })
+    {
+        legacy.setProperty ("presetDirty", dirty, nullptr); juce::MemoryBlock bytes;
+        juce::AudioProcessor::copyXmlToBinary (*legacy.createXml(), bytes);
+        auto restored = testProcessor(); restored->setStateInformation (bytes.getData(), (int) bytes.getSize());
+        const auto uid = restored->getModuleChain (1).getChild (0)["uid"].toString();
+        REQUIRE (std::abs (restored->getGlobalResetValue (id::inputGain, 0) - (dirty ? 0 : -6)) < .001);
+        REQUIRE (std::abs (restored->getGlobalResetValue (id::macros[0], 0) - (dirty ? 0 : 70)) < .001);
+        REQUIRE (std::abs (restored->getModuleResetValue (1, uid, "shift", 0) - (dirty ? 0 : 700)) < .001);
+    }
+}
+
+TEST_CASE ("Preset reset baseline history retains removed entries without creating extra Undo edits")
+{
+    auto p = testProcessor(); p->addModule (1, "FrequencyShift"); p->addModule (1, "SpectralBloom");
+    const auto shift = p->getModuleChain (1).getChild (0)["uid"].toString();
+    p->setModuleParameter (1, shift, "shift", 200.0); p->capturePresetResetBaseline();
+    p->removeModule (1, 1); const auto removed = p->copyPresetState();
+    p->setModuleParameter (1, shift, "shift", 400.0); const auto edited = p->copyPresetState();
+    REQUIRE (p->undo()); REQUIRE (p->copyPresetState().isEquivalentTo (removed));
+    REQUIRE (std::abs (p->getModuleResetValue (1, shift, "shift", 0) - 200) < .001);
+    REQUIRE (p->redo()); REQUIRE (p->copyPresetState().isEquivalentTo (edited));
+    REQUIRE (p->undo()); REQUIRE (p->copyPresetState().isEquivalentTo (removed));
+}
+
+TEST_CASE ("Preset reset baseline stays at the saved value when earlier parameter edits are undone")
+{
+    using namespace scrr::params;
+    auto p = testProcessor(); setParam (*p, id::inputGain, 5);
+    p->capturePresetResetBaseline();
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) - 5) < .001);
+    REQUIRE (p->undo());
+    REQUIRE (std::abs (p->getAPVTS().getRawParameterValue (id::inputGain)->load()) < .001);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) - 5) < .001);
+    REQUIRE (! p->canUndo()); REQUIRE (p->canRedo());
+    REQUIRE (p->redo());
+    REQUIRE (std::abs (p->getAPVTS().getRawParameterValue (id::inputGain)->load() - 5) < .001);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) - 5) < .001);
+    REQUIRE (! p->canRedo());
+}
+
+TEST_CASE ("Preset reset baseline rejects malformed XML numbers instead of resetting them to zero")
+{
+    using namespace scrr::params;
+    auto p = testProcessor(); p->addModule (1, "FrequencyShift");
+    const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString();
+    const auto source = p->addModulator (false);
+    p->setModuleParameter (1, uid, "shift", 300.0); setParam (*p, id::inputGain, -8); p->capturePresetResetBaseline();
+    juce::MemoryBlock host; p->getStateInformation (host);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (host.getData(), (int) host.getSize()); REQUIRE (xml != nullptr);
+    auto state = juce::ValueTree::fromXml (*xml); const auto baseline = state.getChildWithName ("presetResetBaseline");
+    REQUIRE (baseline.getChildWithName ("globals")[id::inputGain].isString());
+    for (const auto* invalid : { "abc", "12junk", "", "NaN", "1e9999" })
+    {
+        auto bad = state.createCopy(); auto values = bad.getChildWithName ("presetResetBaseline");
+        values.getChildWithName ("globals").setProperty (id::inputGain, invalid, nullptr);
+        values.getChildWithProperty ("uid", uid).setProperty ("shift", invalid, nullptr);
+        values.getChildWithProperty ("uid", source).setProperty ("rate", invalid, nullptr);
+        juce::MemoryBlock bytes; juce::AudioProcessor::copyXmlToBinary (*bad.createXml(), bytes);
+        auto restored = testProcessor(); restored->setStateInformation (bytes.getData(), (int) bytes.getSize());
+        const auto newUid = restored->getModuleChain (1).getChild (0)["uid"].toString();
+        REQUIRE (std::abs (restored->getGlobalResetValue (id::inputGain, 4) - 4) < .001);
+        REQUIRE (std::abs (restored->getModuleResetValue (1, newUid, "shift", 7) - 7) < .001);
+        REQUIRE (std::abs (restored->getModuleResetValue (MacroMapping::modulationChannel, source, "rate", 9) - 9) < .001);
+    }
+}
+
+TEST_CASE ("Preset reset baseline retains Formula values through temporary range changes and host restore")
+{
+    using namespace scrr::params;
+    auto p = testProcessor(); p->addModule (1, "FrequencyRemap");
+    const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString();
+    RemapFormula formula; FormulaParameter parameter; parameter.id = "range_baseline"; parameter.name = "Ratio";
+    parameter.minimum = 1; parameter.maximum = 8; parameter.defaultValue = 2; formula.parameters.push_back (parameter);
+    p->setModuleParameter (1, uid, "remapFormula", formula.encode()); p->setModuleParameter (1, uid, parameter.property(), 4.0);
+    p->capturePresetResetBaseline();
+    formula.parameters[0].maximum = 3; p->setModuleParameter (1, uid, "remapFormula", formula.encode());
+    REQUIRE (std::abs ((double) p->getModuleChain (1).getChild (0)[parameter.property()] - 3) < .001);
+    juce::MemoryBlock state; p->getStateInformation (state);
+    auto restored = testProcessor(); restored->setStateInformation (state.getData(), (int) state.getSize());
+    const auto newUid = restored->getModuleChain (1).getChild (0)["uid"].toString();
+    REQUIRE (std::abs (restored->getModuleResetValue (1, newUid, parameter.property(), 2) - 4) < .001);
+    formula.parameters[0].maximum = 8; restored->setModuleParameter (1, newUid, "remapFormula", formula.encode());
+    restored->setModuleParameter (1, newUid, parameter.property(), restored->getModuleResetValue (1, newUid, parameter.property(), 2));
+    REQUIRE (std::abs ((double) restored->getModuleChain (1).getChild (0)[parameter.property()] - 4) < .001);
+}
+
+TEST_CASE ("Preset reset baseline captures the saved snapshot rather than later automation values")
+{
+    using namespace scrr::params;
+    auto p = testProcessor(); p->addModule (1, "FrequencyShift");
+    const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString();
+    const auto sourceId = p->addModulator (false); auto source = p->getModulators().front();
+    p->setModuleParameter (1, uid, "shift", 123.0); source.rate = 2.5f; p->updateModulator (source);
+    setParam (*p, id::inputGain, -7); setParam (*p, id::macros[1], 26);
+    const auto saved = p->copyPresetState();
+    p->setModuleParameter (1, uid, "shift", 500.0); source.rate = 12; p->updateModulator (source);
+    setParam (*p, id::inputGain, -1); setParam (*p, id::macros[1], 80);
+    p->capturePresetResetBaseline (saved);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::inputGain, 0) + 7) < .001);
+    REQUIRE (std::abs (p->getGlobalResetValue (id::macros[1], 0) - 26) < .001);
+    REQUIRE (std::abs (p->getModuleResetValue (1, uid, "shift", 0) - 123) < .001);
+    REQUIRE (std::abs (p->getModuleResetValue (MacroMapping::modulationChannel, sourceId, "rate", 1) - 2.5) < .001);
+    REQUIRE (std::abs (p->getAPVTS().getRawParameterValue (id::inputGain)->load() + 1) < .001);
+    REQUIRE (std::abs ((double) p->getModuleChain (1).getChild (0)["shift"] - 500) < .001);
+}

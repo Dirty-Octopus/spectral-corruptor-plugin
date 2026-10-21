@@ -34,7 +34,7 @@ private:
     void saveLibrary();
     void exportFile();
     void importFile();
-    void saved (const juce::Result&, const juce::String&);
+    void saved (const juce::Result&, const juce::String&, const juce::ValueTree&);
     SpectralCrrptProcessor& processor;
     scrr::PresetManager manager;
     PresetButton preset { "Init" }, previous { "<" }, next { ">" };

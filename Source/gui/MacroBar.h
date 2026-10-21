@@ -3,6 +3,7 @@
 
 #pragma once
 #include "Theme.h"
+#include "AssignableSlider.h"
 #include "../PluginProcessor.h"
 
 namespace scrr::gui {
@@ -41,6 +42,7 @@ public:
             addAndMakeVisible (knob);
             attachments[(size_t) i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.getAPVTS(), scrr::params::id::macros[(size_t) i], knob);
             setupParameterGestures (knob);
+            knob.presetResetValue = [this, i] { return processor.getGlobalResetValue (scrr::params::id::macros[(size_t) i], 0); };
             knob.setTooltip ("Alt/Option-drag: fine adjustment. Cmd/Ctrl-click or double-click: reset.");
             auto& name = names[(size_t) i]; name.setComponentID ("macro-name-" + juce::String (i + 1));
             name.setEditable (false, true); name.setFont (Theme::font (11, true));
@@ -109,7 +111,7 @@ public:
 private:
     SpectralCrrptProcessor& processor;
     MacroKnobLook look;
-    std::array<juce::Slider, 8> knobs;
+    std::array<AssignableSlider, 8> knobs;
     std::array<juce::TextButton, 8> edit;
     std::array<juce::Label, 8> names;
     uint64_t shownNameRevision { ~uint64_t{} };

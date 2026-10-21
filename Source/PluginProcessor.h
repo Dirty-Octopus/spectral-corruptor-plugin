@@ -75,6 +75,12 @@ public:
     bool isPresetDirty() const { return presetDirty.load(); }
     void setPresetName (const juce::String&);
     void setPresetDirty (bool dirty) { presetDirty.store (dirty); }
+    // Physical (not normalised) reset values from the loaded/saved preset.
+    double getGlobalResetValue (const juce::String& parameter, double fallback) const;
+    double getModuleResetValue (int channel, const juce::String& uid,
+                                const juce::Identifier& parameter, double fallback) const;
+    void capturePresetResetBaseline (const juce::ValueTree& savedState = {});
+    uint64_t getResetBaselineRevision() const noexcept { return resetBaselineRevision.load(); }
     bool readHostBeat (scrr::params::HostBeat& beat) const noexcept { return hostBeat.read (beat); }
     float getFrequencyLimit() const noexcept { return scrr::params::frequencyLimitValue (apvts); }
     int getDisplayLatency() const noexcept { return displayLatency.load(); }
@@ -126,6 +132,8 @@ private:
     juce::ValueTree rackState { "RACK" };
     juce::String presetName { "Init" };
     juce::ValueTree presetRecovery;
+    juce::ValueTree resetBaseline { "presetResetBaseline" };
+    std::atomic<uint64_t> resetBaselineRevision {};
     std::atomic<bool> presetDirty { false }, restoring { false };
     std::atomic<uint64_t> structureRevision { 0 };
     std::vector<scrr::params::MacroMapping> macroMappings;
@@ -133,9 +141,12 @@ private:
     std::atomic<uint64_t> macroNameRevision {};
     std::vector<juce::ValueTree> undoHistory;
     size_t undoPosition {};
-    bool applyingUndoState {};
+    bool applyingUndoState {}, restoringHostState {}, restoringRecoveryState {};
     std::atomic<bool> pendingUndoEdit {};
     void recordUndoState (bool beginsEdit = true);
+    juce::ValueTree copyStateWithResetBaseline();
+    void captureResetBaseline (bool newPreset, const juce::ValueTree& savedState = {});
+    void restoreResetBaseline (const juce::ValueTree&, const std::map<juce::String, juce::String>&);
     std::array<std::atomic<float>*, 8> macroParameters {};
     double macroBase (const scrr::params::MacroMapping&) const;
     bool describeMacroTarget (scrr::params::MacroMapping&) const;

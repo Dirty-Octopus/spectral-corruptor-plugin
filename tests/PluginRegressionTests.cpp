@@ -334,11 +334,16 @@ TEST_CASE ("Save and Cancel retire the exact dialog and Save writes a readable p
     const auto directory = juce::File::getCurrentWorkingDirectory().getNonexistentChildFile ("dialog-regression", "");
     struct Cleanup { juce::File path; ~Cleanup() { path.deleteRecursively(); } } cleanup { directory };
     auto processorStorage = testProcessor(); auto& processor = *processorStorage; processor.addModule (1, "SpectralMirror");
+    setParam (processor, scrr::params::id::inputGain, -9); processor.capturePresetResetBaseline();
     scrr::gui::InstrumentLookAndFeel look;
     scrr::gui::PresetBar bar (processor, directory); bar.setLookAndFeel (&look); bar.setSize (900, 34);
     auto* save = findButton (bar, "SAVE"); REQUIRE (save != nullptr);
+    int saveAttempt = 0;
     for (const auto* action : { "Cancel", "Save", "Save" })
     {
+        const float candidateGain = -3.0f - (float) saveAttempt++;
+        setParam (processor, scrr::params::id::inputGain, candidateGain);
+        const auto resetRevision = processor.getResetBaselineRevision();
         save->triggerClick(); pump (40);
         auto* window = dynamic_cast<juce::AlertWindow*> (juce::ModalComponentManager::getInstance()->getModalComponent (0)); REQUIRE (window != nullptr);
         window->getTextEditor ("name")->setText ("Dialog round trip");
@@ -346,22 +351,32 @@ TEST_CASE ("Save and Cancel retire the exact dialog and Save writes a readable p
         auto* button = findButton (*window, action); REQUIRE (button != nullptr); button->triggerClick(); pump (80);
         REQUIRE (closed == nullptr); REQUIRE (juce::ModalComponentManager::getInstance()->getNumModalComponents() == 0);
         const auto file = directory.getChildFile ("Dialog round trip.scpreset");
-        if (juce::String (action) == "Cancel") REQUIRE (! file.exists());
+        if (juce::String (action) == "Cancel")
+        {
+            REQUIRE (! file.exists()); REQUIRE (processor.getResetBaselineRevision() == resetRevision);
+            REQUIRE (std::abs (processor.getGlobalResetValue (scrr::params::id::inputGain, 0) + 9) < .01);
+        }
         else
         {
             REQUIRE (file.existsAsFile()); scrr::PresetManager manager (directory);
             auto restoredStorage = testProcessor(); auto& restored = *restoredStorage; REQUIRE (restored.applyPreset (manager.loadFromFile (file)));
             REQUIRE (restored.getModuleChain (1).getChild (0)["type"].toString() == "SpectralMirror");
             REQUIRE (! processor.isPresetDirty());
+            REQUIRE (processor.getResetBaselineRevision() > resetRevision);
+            REQUIRE (std::abs (processor.getGlobalResetValue (scrr::params::id::inputGain, 0) - candidateGain) < .01);
         }
     }
     // Invalid input must also release the window and leave saved data intact.
+    const auto savedRevision = processor.getResetBaselineRevision();
+    setParam (processor, scrr::params::id::inputGain, -1);
     save->triggerClick(); pump (40);
     auto* window = dynamic_cast<juce::AlertWindow*> (juce::ModalComponentManager::getInstance()->getModalComponent (0)); REQUIRE (window != nullptr);
     window->getTextEditor ("name")->setText ("../invalid");
     juce::Component::SafePointer<juce::AlertWindow> closed (window);
     findButton (*window, "Save")->triggerClick(); pump (60); REQUIRE (closed == nullptr);
     REQUIRE (directory.findChildFiles (juce::File::findFiles, false).size() == 1);
+    REQUIRE (processor.getResetBaselineRevision() == savedRevision);
+    REQUIRE (std::abs (processor.getGlobalResetValue (scrr::params::id::inputGain, 0) + 5) < .01);
     bar.setLookAndFeel (nullptr);
 }
 
@@ -1832,6 +1847,7 @@ TEST_CASE ("Notes is a single editable Markdown area with preview, independent o
 #include "CurveCoordinateTests.h"
 #include "FormulaRoutingTests.h"
 #include "RandomPresetTests.h"
+#include "PresetResetUiTests.h"
 
 int main (int argc, char** argv)
 {

@@ -95,12 +95,67 @@ TEST_CASE ("Update helper waits for its initiating host after registration remov
     juce::StringArray command { "/bin/sh", script.getFullPathName() };
    #endif
     REQUIRE (scrr::updates::UpdateService::writeInstallScript (script, content));
-    juce::ChildProcess helper; REQUIRE (helper.start (command)); pump (350);
-    REQUIRE (helper.isRunning()); REQUIRE (marker.deleteFile()); pump (350);
-    REQUIRE (helper.isRunning()); REQUIRE (! directory.getChildFile ("result.txt").existsAsFile());
+    juce::ChildProcess helper;
+    struct HelperCleanup
+    {
+        juce::ChildProcess& process;
+        juce::File job, cancellation;
+        const char* phase { "startup" };
+        bool passed {};
+        ~HelperCleanup()
+        {
+            bool forced = false;
+            if (process.isRunning())
+            {
+                cancellation.replaceWithText ("cancel");
+                if (! process.waitForProcessToFinish (5000))
+                {
+                    forced = true; process.kill(); process.waitForProcessToFinish (2000);
+                }
+            }
+            if (! passed)
+            {
+                std::cerr << "[UPDATE HELPER] phase=" << phase << " directory=" << job.getFullPathName()
+                          << " running=" << process.isRunning() << " exit=" << process.getExitCode()
+                          << " forced-test-child-cleanup=" << forced
+                          << "\n[UPDATE HELPER STARTED]\n" << job.getChildFile ("started").loadFileAsString()
+                          << "\n[UPDATE HELPER SEEN HOSTS]\n" << job.getChildFile ("seen-hosts.txt").loadFileAsString()
+                          << "\n[UPDATE HELPER RESULT]\n" << job.getChildFile ("result.txt").loadFileAsString() << '\n';
+                // Never block reading a still-running process or descendants
+                // of a forcibly stopped shell. Leave its job for diagnostics.
+                if (! process.isRunning() && ! forced)
+                    std::cerr << "[UPDATE HELPER OUTPUT]\n" << process.readAllProcessOutput() << '\n';
+            }
+        }
+    } cleanup { helper, directory, cancel };
+    REQUIRE (helper.start (command));
+    // Process creation is not script readiness. In particular, a cold Windows
+    // PowerShell may still be starting/autoloading its first cmdlets. Wait for
+    // the production acknowledgements before timing the cancellation contract.
+    const auto startupDeadline = juce::Time::getMillisecondCounterHiRes() + 30000.0;
+    const auto origin = juce::String (scrr::updates::processId());
+    bool ready = false;
+    do
+    {
+        if (directory.getChildFile ("started").existsAsFile())
+            for (const auto& line : juce::StringArray::fromLines (directory.getChildFile ("seen-hosts.txt").loadFileAsString()))
+                if (line.trim() == origin || line.trim().startsWith (origin + " ")) { ready = true; break; }
+        if (ready || ! helper.isRunning()) break;
+        juce::Thread::sleep (20);
+    } while (juce::Time::getMillisecondCounterHiRes() < startupDeadline);
+    REQUIRE (ready); REQUIRE (helper.isRunning());
+    cleanup.phase = "host retention";
+    REQUIRE (marker.deleteFile());
+    // Cross an entire two-second host poll after removing the registration.
+    REQUIRE (! helper.waitForProcessToFinish (2250));
+    REQUIRE (! directory.getChildFile ("result.txt").existsAsFile());
+    cleanup.phase = "cancellation";
     REQUIRE (cancel.replaceWithText ("cancel")); REQUIRE (helper.waitForProcessToFinish (5000));
     REQUIRE (helper.getExitCode() == 0);
+    REQUIRE (directory.getChildFile ("result.txt").loadFileAsString().trim() == "Cancelled");
+    cleanup.phase = "directory cleanup";
     REQUIRE (directory.deleteRecursively());
+    cleanup.passed = true;
 }
 
 TEST_CASE ("Update helper blocks a modified installer before elevation or execution")

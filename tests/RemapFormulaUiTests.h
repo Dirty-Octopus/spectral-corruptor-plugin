@@ -39,7 +39,7 @@ inline void foreground (juce::Component& component)
     }
     REQUIRE (ready);
 }
-inline juce::Component* activeMenu (int requestedResult = 0)
+inline juce::Component* activeMenu (int requestedResult = 0, const char* context = "Formula menu")
 {
     juce::Component* popup = nullptr;
     const auto initialModals = juce::Component::getNumCurrentlyModalComponents();
@@ -58,7 +58,7 @@ inline juce::Component* activeMenu (int requestedResult = 0)
     if (! appeared)
     {
         const auto* focused = juce::Component::getCurrentlyFocusedComponent();
-        std::cerr << "Formula popup timeout: result=" << requestedResult << " initialModals=" << initialModals
+        std::cerr << "Popup timeout: context=" << context << " result=" << requestedResult << " initialModals=" << initialModals
                   << " currentModals=" << juce::Component::getNumCurrentlyModalComponents()
                   << " foreground=" << juce::Process::isForegroundProcess()
                   << " focus=" << (focused ? focused->getComponentID().toStdString() : "none") << '\n';

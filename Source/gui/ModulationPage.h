@@ -347,6 +347,8 @@ private:
     void configureMapping (AssignableSlider& slider, const char* key)
     {
         const juce::Identifier parameter (key);
+        slider.presetResetValue = [this, parameter, fallback = slider.getDoubleClickReturnValue()]
+        { return processor.getModuleResetValue (scrr::params::MacroMapping::modulationChannel, source.uid, parameter, fallback); };
         slider.getProperties().set ("sourceParameter", key);
         if (slider.getComponentID().isEmpty()) slider.setComponentID ("modulation-" + juce::String (key));
         slider.mappingMenu = [this, &slider, parameter] { if (mappingMenu) mappingMenu (slider, source.uid, parameter); };

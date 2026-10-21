@@ -61,6 +61,9 @@ class AssignableSlider : public juce::Slider
     };
 public:
     std::function<void()> mappingMenu;
+    // Resolve at the gesture, so saving a preset updates existing controls
+    // immediately without replacing their host attachments or factory fallback.
+    std::function<double()> presetResetValue;
     // Assigned only to routable target parameters. Source controls intentionally
     // leave this empty: modulation sources cannot route into other sources.
     std::function<void(const juce::String&)> receiveModulationSource;
@@ -104,7 +107,13 @@ public:
     void mouseDown (const juce::MouseEvent& event) override
     {
         if (event.mods.isPopupMenu()) { if (mappingMenu) mappingMenu(); return; }
+        refreshPresetResetValue();
         juce::Slider::mouseDown (event);
+    }
+    void mouseDoubleClick (const juce::MouseEvent& event) override
+    {
+        refreshPresetResetValue();
+        juce::Slider::mouseDoubleClick (event);
     }
     void paintOverChildren (juce::Graphics& g) override
     {
@@ -113,6 +122,13 @@ public:
         g.setColour (Theme::yellow()); g.drawRect (getLocalBounds(), 2);
     }
 private:
+    void refreshPresetResetValue()
+    {
+        if (! presetResetValue || ! isDoubleClickReturnEnabled()) return;
+        const double value = presetResetValue();
+        if (std::isfinite (value))
+            setDoubleClickReturnValue (true, juce::jlimit (getMinimum(), getMaximum(), value), resetModifier());
+    }
     bool mapped {}, dropHighlighted {};
     scrr::params::ModulationValues values {};
     std::vector<std::unique_ptr<Strip>> strips;

@@ -5,7 +5,9 @@
 #include "PluginEditor.h"
 #include "modules/ModuleSpecs.h"
 #include "RandomPreset.h"
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
 
 namespace {
 const juce::String chainNames[] = { "modules", "ch1", "ch2", "ch3", "ch4" };
@@ -83,6 +85,34 @@ void syncFormulaParameters (juce::ValueTree module, const juce::ValueTree& clean
         if (property.toString().startsWith ("formulaParam_")) module.setProperty (property, clean[property], nullptr);
     }
 }
+bool isFiniteNumber (const juce::var& value)
+{
+    return (value.isInt() || value.isInt64() || value.isDouble() || value.isBool())
+        && std::isfinite ((double) value);
+}
+bool readResetNumber (const juce::var& value, double& number)
+{
+    if (isFiniteNumber (value)) { number = (double) value; return true; }
+    if (! value.isString()) return false;
+    // XML attributes lose their numeric var type. Parse only at validated
+    // parameter keys, and reject partial input instead of silently using zero.
+    const auto text = value.toString().trim();
+    if (text.isEmpty()) return false;
+    const auto* start = text.toRawUTF8(); char* end = nullptr;
+    errno = 0; number = std::strtod (start, &end);
+    return end != start && *end == '\0' && errno != ERANGE && std::isfinite (number);
+}
+juce::ValueTree numericResetEntry (const juce::ValueTree& state, const char* type)
+{
+    juce::ValueTree result (type);
+    result.setProperty ("uid", state["uid"], nullptr);
+    for (int i = 0; i < state.getNumProperties(); ++i)
+    {
+        const auto key = state.getPropertyName (i);
+        if (isFiniteNumber (state[key])) result.setProperty (key, state[key], nullptr);
+    }
+    return result;
+}
 }
 
 SpectralCrrptProcessor::SpectralCrrptProcessor (std::shared_ptr<scrr::licensing::LicenseManager> licence)
@@ -92,6 +122,7 @@ SpectralCrrptProcessor::SpectralCrrptProcessor (std::shared_ptr<scrr::licensing:
       license (licence != nullptr ? std::move (licence) : scrr::licensing::LicenseManager::shared()),
       apvts (*this, nullptr, "PARAMS", scrr::params::createParameterLayout())
 {
+    resetBaseline.setProperty ("session", juce::Uuid().toString(), nullptr);
     for (size_t i = 0; i < macroParameters.size(); ++i) macroParameters[i] = apvts.getRawParameterValue (scrr::params::id::macros[i]);
     for (const auto& name : chainNames) rackState.appendChild (juce::ValueTree (name), nullptr);
     publishRack (true);
@@ -175,7 +206,7 @@ void SpectralCrrptProcessor::publishRack (bool structural)
 void SpectralCrrptProcessor::recordUndoState (bool beginsEdit)
 {
     if (applyingUndoState) return;
-    auto state = copyPresetState();
+    auto state = copyStateWithResetBaseline();
     if (undoHistory.empty())
     {
         undoHistory.push_back (state);
@@ -275,6 +306,7 @@ bool SpectralCrrptProcessor::randomizePreset (int effectCount, juce::int64 seed)
         }
     }
     presetDirty.store (true);
+    captureResetBaseline (true);
     // Validation removes old effect bindings and bindings to those routes, while
     // preserving global/modulator routes and all source/base values.
     publishRack (true);
@@ -481,6 +513,7 @@ juce::ValueTree SpectralCrrptProcessor::copyPresetState()
     const juce::ScopedLock lock (stateLock);
     auto result = apvts.copyState();
     result.removeChild (result.getChildWithName ("presetRecovery"), nullptr);
+    result.removeChild (result.getChildWithName ("presetResetBaseline"), nullptr);
     for (const auto& name : chainNames)
     {
         result.removeChild (result.getChildWithName (name), nullptr);
@@ -508,13 +541,170 @@ juce::ValueTree SpectralCrrptProcessor::copyPresetState()
     return result;
 }
 
+juce::ValueTree SpectralCrrptProcessor::copyStateWithResetBaseline()
+{
+    const juce::ScopedLock lock (stateLock);
+    auto state = copyPresetState();
+    state.removeChild (state.getChildWithName ("presetResetBaseline"), nullptr);
+    state.appendChild (resetBaseline.createCopy(), nullptr);
+    return state;
+}
+
+void SpectralCrrptProcessor::capturePresetResetBaseline (const juce::ValueTree& savedState)
+{
+    captureResetBaseline (false, savedState);
+}
+
+void SpectralCrrptProcessor::captureResetBaseline (bool newPreset, const juce::ValueTree& savedState)
+{
+    const juce::ScopedLock lock (stateLock);
+    // Save passes the exact snapshot written to disk; host automation may have
+    // moved the live values while that write was in progress.
+    const auto state = savedState.hasType ("PARAMS") ? savedState : copyPresetState();
+    juce::ValueTree next ("presetResetBaseline"), globals ("globals");
+    const auto session = newPreset ? juce::Uuid().toString() : resetBaseline["session"].toString();
+    next.setProperty ("session", session, nullptr);
+    for (auto* parameter : getParameters())
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameter))
+        {
+            double number {};
+            if (! readResetNumber (state.getChildWithProperty ("id", ranged->paramID)["value"], number)) continue;
+            const auto range = ranged->getNormalisableRange();
+            globals.setProperty (ranged->paramID, juce::jlimit ((double) range.start, (double) range.end, number), nullptr);
+        }
+    next.appendChild (globals, nullptr);
+    for (const auto& name : chainNames)
+        for (auto module : state.getChildWithName (name)) next.appendChild (numericResetEntry (module, "module"), nullptr);
+    for (auto source : state.getChildWithName ("modulators")) next.appendChild (numericResetEntry (source, "source"), nullptr);
+    resetBaseline = next;
+    // Saving changes the reset target for this preset even when an earlier
+    // parameter edit is undone. Other loaded/random preset sessions keep theirs.
+    if (! newPreset)
+        for (auto& history : undoHistory)
+            if (history.getChildWithName ("presetResetBaseline")["session"].toString() == session)
+            {
+                history.removeChild (history.getChildWithName ("presetResetBaseline"), nullptr);
+                history.appendChild (next.createCopy(), nullptr);
+            }
+    resetBaselineRevision.fetch_add (1);
+}
+
+double SpectralCrrptProcessor::getGlobalResetValue (const juce::String& parameter, double fallback) const
+{
+    const juce::ScopedLock lock (stateLock);
+    const auto value = resetBaseline.getChildWithName ("globals").getProperty (parameter);
+    return isFiniteNumber (value) ? (double) value : fallback;
+}
+
+double SpectralCrrptProcessor::getModuleResetValue (int channel, const juce::String& uid,
+                                                 const juce::Identifier& parameter, double fallback) const
+{
+    const juce::ScopedLock lock (stateLock);
+    const auto type = channel == scrr::params::MacroMapping::modulationChannel ? "source" : "module";
+    for (auto entry : resetBaseline)
+        if (entry.hasType (type) && entry["uid"].toString() == uid)
+        {
+            const auto value = entry[parameter];
+            return isFiniteNumber (value) ? (double) value : fallback;
+        }
+    return fallback;
+}
+
+void SpectralCrrptProcessor::restoreResetBaseline (const juce::ValueTree& saved,
+                                                 const std::map<juce::String, juce::String>& restoredIds)
+{
+    // Internal history already validated the baseline and keeps module UIDs.
+    // Preserve its exact tree, including entries for temporarily removed stages,
+    // so replay cannot manufacture a metadata-only edit and invalidate Redo.
+    if (applyingUndoState)
+    {
+        resetBaseline = saved.hasType ("presetResetBaseline") ? saved.createCopy() : juce::ValueTree ("presetResetBaseline");
+        resetBaselineRevision.fetch_add (1);
+        return;
+    }
+    juce::ValueTree next ("presetResetBaseline");
+    // Host/recovery loading creates new module UIDs and starts a new local
+    // history session. Only Undo reuses the old UID/session pair above.
+    next.setProperty ("session", juce::Uuid().toString(), nullptr);
+    if (saved.hasType ("presetResetBaseline"))
+    {
+        juce::ValueTree globals ("globals");
+        const auto oldGlobals = saved.getChildWithName ("globals");
+        for (auto* parameter : getParameters())
+            if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameter))
+            {
+                const auto value = oldGlobals[ranged->paramID];
+                double number {};
+                if (! readResetNumber (value, number)) continue;
+                const auto range = ranged->getNormalisableRange();
+                globals.setProperty (ranged->paramID, juce::jlimit ((double) range.start, (double) range.end, number), nullptr);
+            }
+        next.appendChild (globals, nullptr);
+        for (const auto& name : chainNames)
+            for (auto module : rackState.getChildWithName (name))
+            {
+                const auto uid = module["uid"].toString();
+                juce::String oldUid;
+                for (const auto& pair : restoredIds)
+                    if (pair.second == uid) { oldUid = pair.first.fromFirstOccurrenceOf (":", false, false); break; }
+                if (oldUid.isEmpty()) continue;
+                for (auto entry : saved)
+                    if (entry.hasType ("module") && entry["uid"].toString() == oldUid)
+                    {
+                        auto candidate = module.createCopy();
+                        std::vector<juce::Identifier> keys;
+                        for (int i = 0; i < entry.getNumProperties(); ++i)
+                        {
+                            const auto key = entry.getPropertyName (i);
+                            double number {};
+                            if (isFiniteNumber (module[key]) && readResetNumber (entry[key], number))
+                            { candidate.setProperty (key, number, nullptr); keys.push_back (key); }
+                        }
+                        const auto clean = cleanModule (candidate);
+                        juce::ValueTree restored ("module"); restored.setProperty ("uid", uid, nullptr);
+                        for (const auto& key : keys)
+                        {
+                            // Formula ranges can be temporary edits. Preserve
+                            // the saved value even if it lies outside that range;
+                            // the current control clamps when reset is performed.
+                            const bool custom = module["type"].toString() == "FrequencyRemap"
+                                && key.toString().startsWith ("formulaParam_");
+                            const auto value = custom ? candidate[key] : clean[key];
+                            if (isFiniteNumber (value)) restored.setProperty (key, value, nullptr);
+                        }
+                        next.appendChild (restored, nullptr); break;
+                    }
+            }
+        for (const auto& source : modulators)
+            for (auto entry : saved)
+                if (entry.hasType ("source") && entry["uid"].toString() == source.uid)
+                {
+                    auto candidate = source.state();
+                    std::vector<juce::Identifier> keys;
+                    for (int i = 0; i < entry.getNumProperties(); ++i)
+                    {
+                        const auto key = entry.getPropertyName (i);
+                        double number {};
+                        if (isFiniteNumber (candidate[key]) && readResetNumber (entry[key], number))
+                        { candidate.setProperty (key, number, nullptr); keys.push_back (key); }
+                    }
+                    const auto clean = scrr::params::ModulationSource::read (candidate).state();
+                    juce::ValueTree restored ("source"); restored.setProperty ("uid", source.uid, nullptr);
+                    for (const auto& key : keys) if (isFiniteNumber (clean[key])) restored.setProperty (key, clean[key], nullptr);
+                    next.appendChild (restored, nullptr); break;
+                }
+    }
+    resetBaseline = next;
+    resetBaselineRevision.fetch_add (1);
+}
+
 bool SpectralCrrptProcessor::switchPreset (const juce::ValueTree& preset, const juce::String& name, bool keepRecovery)
 {
     const juce::ScopedLock lock (stateLock);
     juce::ValueTree previous;
     if (keepRecovery)
     {
-        previous = copyPresetState();
+        previous = copyStateWithResetBaseline();
         previous.setProperty ("presetName", presetName, nullptr);
         previous.setProperty ("presetDirty", presetDirty.load(), nullptr);
     }
@@ -540,7 +730,9 @@ juce::String SpectralCrrptProcessor::getPresetRecoveryName() const
 bool SpectralCrrptProcessor::restorePresetRecovery()
 {
     const juce::ScopedLock lock (stateLock);
-    if (! presetRecovery.isValid() || ! applyPreset (presetRecovery)) return false;
+    if (! presetRecovery.isValid()) return false;
+    const juce::ScopedValueSetter<bool> recoveryRestore (restoringRecoveryState, true);
+    if (! applyPreset (presetRecovery)) return false;
     presetName = presetRecovery.getProperty ("presetName", "Init").toString();
     presetDirty.store ((bool) presetRecovery.getProperty ("presetDirty", false));
     return true;
@@ -587,6 +779,7 @@ bool SpectralCrrptProcessor::applyPreset (const juce::ValueTree& preset)
         globals.removeChild (globals.getChildWithName ("macroNames"), nullptr);
         globals.removeChild (globals.getChildWithName ("macroMappings"), nullptr);
         globals.removeChild (globals.getChildWithName ("modulators"), nullptr);
+        globals.removeChild (globals.getChildWithName ("presetResetBaseline"), nullptr);
         for (const auto& macroId : scrr::params::id::macros)
             if (! globals.getChildWithProperty ("id", macroId).isValid())
             {
@@ -658,6 +851,16 @@ bool SpectralCrrptProcessor::applyPreset (const juce::ValueTree& preset)
             }
         }
     }
+    if (applyingUndoState || restoringRecoveryState || restoringHostState)
+    {
+        const auto saved = preset.getChildWithName ("presetResetBaseline");
+        if (saved.isValid() || applyingUndoState || (bool) preset.getProperty ("presetDirty", false))
+            restoreResetBaseline (saved, restoredIds);
+        else
+            captureResetBaseline (true);
+    }
+    else
+        captureResetBaseline (true);
     publishRack (true);
     restoring.store (false);
     return true;
@@ -792,7 +995,7 @@ juce::AudioProcessorEditor* SpectralCrrptProcessor::createEditor() { return new 
 void SpectralCrrptProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     const juce::ScopedLock lock (stateLock);
-    auto state = copyPresetState();
+    auto state = copyStateWithResetBaseline();
     state.setProperty ("presetName", presetName, nullptr);
     state.setProperty ("presetDirty", presetDirty.load(), nullptr);
     if (presetRecovery.isValid())
@@ -811,6 +1014,7 @@ void SpectralCrrptProcessor::setStateInformation (const void* data, int bytes)
     {
         auto state = juce::ValueTree::fromXml (*xml);
         const juce::ScopedLock lock (stateLock);
+        const juce::ScopedValueSetter<bool> hostRestore (restoringHostState, true);
         if (applyPreset (state))
         {
             presetName = state.getProperty ("presetName", "Init").toString();

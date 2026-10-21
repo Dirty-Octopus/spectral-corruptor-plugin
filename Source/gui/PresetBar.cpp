@@ -117,9 +117,10 @@ void PresetBar::step (int direction, bool keepRecovery)
     if (entries.isEmpty()) return;
     requestSelect ((index + direction + entries.size()) % entries.size(), keepRecovery);
 }
-void PresetBar::saved (const juce::Result& result, const juce::String& name)
+void PresetBar::saved (const juce::Result& result, const juce::String& name, const juce::ValueTree& savedState)
 {
     if (result.failed()) { setStatus (result.getErrorMessage()); status.setTooltip (promptText (result.getErrorMessage())); return; }
+    processor.capturePresetResetBaseline (savedState);
     processor.setPresetName (name); processor.setPresetDirty (false);
     setStatus ("Saved"); status.setTooltip ({}); timerCallback();
 }
@@ -139,8 +140,9 @@ void PresetBar::saveLibrary()
         const auto name = closed->getTextEditorContents ("name").trim();
         closed->setVisible (false);
         if (result != 1) return;
-        auto savedResult = safe->manager.saveToUser (name, safe->processor.copyPresetState());
-        safe->saved (savedResult, name);
+        const auto savedState = safe->processor.copyPresetState();
+        auto savedResult = safe->manager.saveToUser (name, savedState);
+        safe->saved (savedResult, name, savedState);
     }), false);
 }
 void PresetBar::exportFile()
@@ -153,7 +155,8 @@ void PresetBar::exportFile()
         {
             if (! safe || fc.getResult() == juce::File()) return;
             auto file = fc.getResult().withFileExtension ("scpreset");
-            safe->saved (safe->manager.saveToFile (file, safe->processor.copyPresetState()), file.getFileNameWithoutExtension());
+            const auto savedState = safe->processor.copyPresetState();
+            safe->saved (safe->manager.saveToFile (file, savedState), file.getFileNameWithoutExtension(), savedState);
         });
 }
 void PresetBar::importFile()

@@ -17,6 +17,7 @@ public:
         setTooltip ("Drag: frequency / gain. Alt/Option-drag: fine. Scroll: Q. Double-click: reset band. Right-click: assign X/Y modulation, band shape or bypass.");
     }
     std::function<void(const juce::String&, const juce::var&)> onParameterChange;
+    std::function<double(const juce::String&, double)> parameterResetValue;
     std::function<void(int)> onBandSelected;
     std::function<void(juce::Component&, const juce::String&)> mappingMenu;
     void setState (const juce::ValueTree& next)
@@ -162,9 +163,16 @@ private:
     {
         const auto safe = juce::Component::SafePointer<SpectralEqEditor> (this);
         const auto targetUid = getModuleUid();
-        change ("Freq", scrr::dsp::spectralEqFrequencies[(size_t) selected]);
-        if (safe && safe->getModuleUid() == targetUid) safe->change ("Gain", 0.0);
-        if (safe && safe->getModuleUid() == targetUid) safe->change ("Q", 0.7071067811865476);
+        const auto reset = [this] (const char* suffix, double fallback, double minimum, double maximum)
+        {
+            const double value = parameterResetValue ? parameterResetValue (scrr::dsp::spectralEqParameter (selected, suffix), fallback) : fallback;
+            return std::isfinite (value) ? juce::jlimit (minimum, maximum, value) : fallback;
+        };
+        const double frequency = reset ("Freq", scrr::dsp::spectralEqFrequencies[(size_t) selected], 20, 20000);
+        const double gain = reset ("Gain", 0, -24, 24), q = reset ("Q", 0.7071067811865476, .1, 18);
+        change ("Freq", frequency);
+        if (safe && safe->getModuleUid() == targetUid) safe->change ("Gain", gain);
+        if (safe && safe->getModuleUid() == targetUid) safe->change ("Q", q);
     }
     void showBandMenu()
     {

@@ -55,6 +55,8 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     remapFormula.layoutChanged = [this] { resized(); };
     remapFormula.effectiveValue = [this] (const juce::Identifier& parameter, double base)
     { return processor.getEffectiveValue (channel, remapFormula.getModuleUid(), parameter, base); };
+    remapFormula.parameterResetValue = [this] (const juce::Identifier& parameter, double fallback)
+    { return processor.getModuleResetValue (channel, remapFormula.getModuleUid(), parameter, fallback); };
     inspector.addChildComponent (remapReset); inspector.addChildComponent (remapReverse);
     remapEditor.setComponentID ("frequency-remap-curve");
     remapEditor.setConstraints (false, false);
@@ -93,6 +95,8 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
         processor.setModuleParameter (channel, selectedUid, juce::Identifier (key), value);
         for (auto& control : controls) if (control->getComponentID() == key) control->setValueFromState (value);
     };
+    eqEditor.parameterResetValue = [this] (const juce::String& key, double fallback)
+    { return processor.getModuleResetValue (channel, eqEditor.getModuleUid(), juce::Identifier (key), fallback); };
     eqEditor.onBandSelected = [this] (int) { const auto safe = juce::Component::SafePointer<EditorContent> (this); juce::MessageManager::callAsync ([safe] { if (safe) { safe->displayedChain = safe->processor.getModuleChain (safe->channel); safe->rebuildInspector(); safe->resized(); } }); };
     eqEditor.mappingMenu = [this] (juce::Component& target, const juce::String& parameter)
     {
@@ -152,7 +156,12 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     masterViewport.setViewedComponent (&masterContent, false); masterViewport.setScrollBarsShown (true, false); addAndMakeVisible (masterViewport);
     for (auto* b : { &bypass, &solo, &post }) addAndMakeVisible (b);
     auto& state = processor.getAPVTS();
-    auto attachSlider = [&] (const juce::String& id, juce::Slider& control) { sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, id, control)); setupParameterGestures (control); };
+    auto attachSlider = [&] (const juce::String& id, AssignableSlider& control)
+    {
+        sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, id, control)); setupParameterGestures (control);
+        const double fallback = control.getDoubleClickReturnValue();
+        control.presetResetValue = [this, id, fallback] { return processor.getGlobalResetValue (id, fallback); };
+    };
     auto attachButton = [&] (const juce::String& id, juce::ToggleButton& control) { buttonAttachments.push_back (std::make_unique<ButtonAttachment> (state, id, control)); };
     auto attachCombo = [&] (const juce::String& id, juce::ComboBox& control) { comboAttachments.push_back (std::make_unique<ComboAttachment> (state, id, control)); };
     using namespace scrr::params;
@@ -846,6 +855,8 @@ void EditorContent::rebuildInspector()
         if (auto* slider = control->getAssignableSlider())
         {
             const auto sliderSafe = juce::Component::SafePointer<AssignableSlider> (slider);
+            slider->presetResetValue = [safe, targetChannel, uid, id, fallback = (double) param.defaultVal]
+            { return safe ? safe->processor.getModuleResetValue (targetChannel, uid, juce::Identifier (id), fallback) : fallback; };
             slider->mappingMenu = [safe, sliderSafe, targetChannel, uid, id]
             { if (safe && sliderSafe) safe->macroMenu (*sliderSafe, targetChannel, uid, juce::Identifier (id)); };
             slider->receiveModulationSource = [safe, targetChannel, uid, id] (const juce::String& source)

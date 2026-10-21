@@ -4,26 +4,21 @@
 #pragma once
 
 namespace coordinateUiTests {
-inline void chooseMenu (int result, const char* context = "coordinate menu")
+struct MenuSession
 {
-    // Synthetic mouseDown bypasses native activation. A macOS CLI must also
-    // become a foreground-capable app so popup focus timers do not dismiss it.
-   #if JUCE_MAC
-    juce::Process::setDockIconVisible (true);
-   #endif
-    juce::Process::makeForegroundProcess();
-    const bool opened = waitForUI ([] { return juce::Component::getCurrentlyModalComponent() != nullptr; });
-    if (! opened) std::cerr << "Missing popup: " << context << '\n';
-    REQUIRE (opened);
-    auto* menu = juce::Component::getCurrentlyModalComponent();
-    const int item = result == 20 ? 1 : result == 21 ? 2 : result;
-    if (item == 1 || item == 2)
-    {
-        for (int i = 0; i < item; ++i) menu->keyPressed (juce::KeyPress (juce::KeyPress::downKey));
-        menu->keyPressed (juce::KeyPress (juce::KeyPress::returnKey));
-    }
-    else menu->exitModalState (result);
-    pump (60);
+    explicit MenuSession (juce::Component& owner) { formulaUiTests::foreground (owner); }
+    ~MenuSession() { juce::PopupMenu::dismissAllActiveMenus(); pump (20); }
+};
+inline void chooseMenu (int result, const char* context, const juce::String& expectedLabel)
+{
+    juce::Component::SafePointer<juce::Component> menu (formulaUiTests::activeMenu (result, context));
+    REQUIRE (menu != nullptr); REQUIRE (formulaUiTests::menuContains (*menu, expectedLabel));
+    // Native pointer/focus events may already highlight an item on Windows.
+    // Select the intended result, rather than counting Down presses from an
+    // assumed empty selection. Only the current popup must finish: its callback
+    // can legitimately open the next source menu or an inline numeric editor.
+    menu->exitModalState (result);
+    REQUIRE (waitForUI ([&] { return menu == nullptr || ! menu->isCurrentlyModal (false); }));
 }
 inline juce::Point<float> position (const scrr::gui::TransferCurveEditor& editor, float x, float y)
 {
@@ -58,18 +53,16 @@ TEST_CASE ("Frequency Remap coordinate menus independently assign X and Y withou
     p->setModuleParameter (1, uid, "remapCurve", curve.encode());
     const auto source = p->addModulator (false);
     auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor()); editor->setSize (1040, 780);
-    editor->addToDesktop (0); editor->setVisible (true);
-    // Give native menus a visible focused peer for the synthetic gesture.
-    editor->setWantsKeyboardFocus (true); editor->toFront (true); editor->grabKeyboardFocus(); pump (200);
+    MenuSession session (*editor);
     auto* graph = dynamic_cast<scrr::gui::TransferCurveEditor*> (findID (*editor, "frequency-remap-curve")); REQUIRE (graph != nullptr);
     REQUIRE (graph->getCurve().pointIndex (7) >= 0); REQUIRE (graph->canMapCoordinate (7, true));
     graph->mouseDown (mouse (*graph, position (*graph, .4f, .6f), false, juce::ModifierKeys::rightButtonModifier));
-    chooseMenu (1, "Remap X axis"); chooseMenu (1, "Remap X source");
+    chooseMenu (1, "Remap X axis", "Assign X / Input frequency"); chooseMenu (1, "Remap X source", "M1");
     auto routes = p->getMacroMappings(); REQUIRE (routes.size() == 1);
     REQUIRE (routes[0].channel == 1); REQUIRE (routes[0].uid == uid); REQUIRE (routes[0].parameter == curveCoordinateParameter (7, true));
     REQUIRE (routes[0].sourceUid.isEmpty()); REQUIRE (routes[0].macro == 0);
     graph->mouseDown (mouse (*graph, position (*graph, .4f, .6f), false, juce::ModifierKeys::rightButtonModifier));
-    chooseMenu (2, "Remap Y axis"); chooseMenu (100, "Remap Y source");
+    chooseMenu (2, "Remap Y axis", "Assign Y / Output frequency"); chooseMenu (100, "Remap Y source", "SEND TO LFO");
     routes = p->getMacroMappings(); REQUIRE (routes.size() == 2);
     REQUIRE (routes[1].parameter == curveCoordinateParameter (7, false)); REQUIRE (routes[1].sourceUid == source);
     REQUIRE (TransferCurve::decode (p->getModuleChain (1).getChild (0)["remapCurve"].toString()).points.size() == 3);
@@ -81,11 +74,13 @@ TEST_CASE ("Mapping response coordinate menu identifies the owning route")
     if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr) return;
     MacroMapping route; route.uid = "module"; route.routeUid = "owning-response-route";
     route.responseCurve.points = { { 0, 0, 0, 1 }, { .4f, .2f, 0, 7 }, { 1, 1, 0, 2 } };
-    scrr::gui::MacroMappingRow row (route); row.setSize (700, 270); row.addToDesktop (0); row.setVisible (true);
+    scrr::gui::MacroMappingRow row (route); row.setSize (700, 270);
     juce::String owner; juce::Identifier target;
     row.mappingMenu = [&] (juce::Component&, const juce::String& uid, const juce::Identifier& key) { owner = uid; target = key; };
     auto* graph = dynamic_cast<scrr::gui::TransferCurveEditor*> (findID (row, "map-response-curve")); REQUIRE (graph != nullptr);
-    graph->mouseDown (mouse (*graph, position (*graph, .4f, .2f), false, juce::ModifierKeys::rightButtonModifier)); chooseMenu (2);
+    MenuSession session (row);
+    graph->mouseDown (mouse (*graph, position (*graph, .4f, .2f), false, juce::ModifierKeys::rightButtonModifier));
+    chooseMenu (2, "Mapping response Y axis", "Assign Y / Response value");
     REQUIRE (owner == route.routeUid); REQUIRE (target == curveCoordinateParameter (7, false)); REQUIRE (graph->getCurve().points.size() == 3);
 }
 
@@ -94,11 +89,14 @@ TEST_CASE ("Spectral EQ node menu offers independent frequency and gain assignme
     using namespace coordinateUiTests;
     if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr) return;
     scrr::gui::SpectralEqEditor graph; juce::ValueTree state ("module"); state.setProperty ("uid", "equalizer", nullptr);
-    graph.setState (state); graph.setSize (600, 230); graph.addToDesktop (0); graph.setVisible (true);
+    graph.setState (state); graph.setSize (600, 230);
     juce::String target; graph.mappingMenu = [&] (juce::Component&, const juce::String& key) { target = key; };
-    graph.mouseDown (mouse (graph, graph.getBandPosition (0), false, juce::ModifierKeys::rightButtonModifier)); chooseMenu (20);
+    MenuSession session (graph);
+    graph.mouseDown (mouse (graph, graph.getBandPosition (0), false, juce::ModifierKeys::rightButtonModifier));
+    chooseMenu (20, "EQ frequency axis", "Assign X / Frequency");
     REQUIRE (target == "band1Freq");
-    graph.mouseDown (mouse (graph, graph.getBandPosition (0), false, juce::ModifierKeys::rightButtonModifier)); chooseMenu (21);
+    graph.mouseDown (mouse (graph, graph.getBandPosition (0), false, juce::ModifierKeys::rightButtonModifier));
+    chooseMenu (21, "EQ gain axis", "Assign Y / Gain");
     REQUIRE (target == "band1Gain");
 }
 
@@ -136,16 +134,17 @@ TEST_CASE ("Formula workspace sliders use ordinary Macro and modulation routes")
     if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr) return;
     auto p = testProcessor(); p->addModule (1, "FrequencyRemap");
     const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString(); const auto source = p->addModulator (false);
-    auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor()); editor->setSize (1040, 780); editor->addToDesktop (0); editor->setVisible (true);
-    // Give native menus a visible focused peer for the synthetic gesture.
-    editor->setWantsKeyboardFocus (true); editor->toFront (true); editor->grabKeyboardFocus(); pump (200);
+    auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor()); editor->setSize (1040, 780); MenuSession session (*editor);
     auto* mode = dynamic_cast<juce::Button*> (findID (*editor, "remap-mode-formula")); REQUIRE (mode != nullptr); mode->onClick(); pump (100);
     auto* formula = dynamic_cast<scrr::gui::RemapFormulaEditor*> (findID (*editor, "remap-formula-editor")); REQUIRE (formula != nullptr); REQUIRE (formula->isVisible());
     formulaUiTests::click (*formula, { 360, 280 }, true); formulaUiTests::chooseMenu (500);
     REQUIRE (waitForUI ([&] { return formula->getParameterSliders().size() == 1; }));
     const auto sliders = formula->getParameterSliders(); REQUIRE (sliders.size() == 1);
-    sliders.front()->mouseDown (mouse (*sliders.front(), { 10, 10 }, false, juce::ModifierKeys::rightButtonModifier)); chooseMenu (1);
+    formulaUiTests::finishInlineEditBeforePointerInput (*sliders.front());
+    sliders.front()->mouseDown (mouse (*sliders.front(), { 10, 10 }, false, juce::ModifierKeys::rightButtonModifier));
+    chooseMenu (1, "Formula parameter source", "M1");
     REQUIRE (p->getMacroMappings().size() == 1); REQUIRE (p->getMacroMappings()[0].parameter.toString() == sliders.front()->getComponentID());
+    REQUIRE (p->getMacroMappings()[0].macro == 0);
     REQUIRE (sliders.front()->dropModulationSource (source)); REQUIRE (p->getMacroMappings().size() == 2);
     REQUIRE (p->getMacroMappings()[1].uid == uid); REQUIRE (p->getMacroMappings()[1].sourceUid == source);
 }

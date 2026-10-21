@@ -79,6 +79,8 @@ class RemapFormulaEditor : public juce::Component
                 }
             }
             else setupSlider (slider, 0, 1, 0, 0);
+            slider.presetResetValue = [this, fallback = slider.getDoubleClickReturnValue()]
+            { return owner.parameterResetValue ? owner.parameterResetValue (juce::Identifier (slider.getComponentID()), fallback) : fallback; };
             slider.setTextBoxStyle (juce::Slider::TextBoxAbove, false, 184, 24); slider.setScrollWheelEnabled (false);
             const double savedValue = (double) owner.state.getProperty (parameter.property(), parameter.defaultValue);
             slider.setValue (std::isfinite (savedValue) ? savedValue : slider.getMinimum(), juce::dontSendNotification);
@@ -392,6 +394,7 @@ public:
     std::function<void(juce::Component&, const juce::Identifier&)> mappingMenu;
     std::function<void()> onParametersChanged, layoutChanged;
     std::function<double(const juce::Identifier&, double)> effectiveValue;
+    std::function<double(const juce::Identifier&, double)> parameterResetValue;
 
     RemapFormulaEditor() : canvas (*this), preview (*this)
     {
