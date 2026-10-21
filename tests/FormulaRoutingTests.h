@@ -18,6 +18,27 @@ scrr::params::RemapFormula routedRatioFormula()
 }
 }
 
+TEST_CASE ("Remap invalid policy defaults to silence and survives preset host clipboard and undo")
+{
+    auto p = testProcessor(); p->addModule (1, "FrequencyRemap");
+    const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString();
+    REQUIRE ((int) p->getModuleChain (1).getChild (0)["remapInvalidPolicy"] == 0);
+    p->setModuleParameter (1, uid, "remapInvalidPolicy", 1);
+    REQUIRE ((int) p->getModuleChain (1).getChild (0)["remapInvalidPolicy"] == 1);
+    REQUIRE (p->undo()); REQUIRE ((int) p->getModuleChain (1).getChild (0)["remapInvalidPolicy"] == 0);
+    REQUIRE (p->redo()); REQUIRE ((int) p->getModuleChain (1).getChild (0)["remapInvalidPolicy"] == 1);
+    auto restored = testProcessor(); REQUIRE (restored->applyPreset (p->copyPresetState()));
+    REQUIRE ((int) restored->getModuleChain (1).getChild (0)["remapInvalidPolicy"] == 1);
+    juce::MemoryBlock host; p->getStateInformation (host); restored->setStateInformation (host.getData(), (int) host.getSize());
+    REQUIRE ((int) restored->getModuleChain (1).getChild (0)["remapInvalidPolicy"] == 1);
+    const auto copied = p->pasteModule (2, p->copyModule (1, uid)); REQUIRE (copied.isNotEmpty());
+    REQUIRE ((int) p->getModuleChain (2).getChild (0)["remapInvalidPolicy"] == 1);
+    auto legacy = p->copyPresetState(); legacy.getChildWithName ("ch1").getChild (0).removeProperty ("remapInvalidPolicy", nullptr);
+    REQUIRE (restored->applyPreset (legacy)); REQUIRE ((int) restored->getModuleChain (1).getChild (0)["remapInvalidPolicy"] == 0);
+    p->setModuleParameter (1, uid, "remapInvalidPolicy", 7);
+    REQUIRE ((int) p->getModuleChain (1).getChild (0)["remapInvalidPolicy"] == 0);
+}
+
 TEST_CASE ("Formula custom Macro renders the changed frequency while its saved base stays unchanged")
 {
     using namespace scrr::params;

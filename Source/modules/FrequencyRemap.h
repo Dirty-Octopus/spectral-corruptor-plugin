@@ -47,6 +47,7 @@ public:
     {
         requestedAmount = juce::jlimit (0.0, 1.0, (double) state.getProperty ("amount", 100.0) / 100.0);
         formulaMode = (int) state.getProperty ("remapMode", 0) == 1;
+        preserveInvalid = (int) state.getProperty ("remapInvalidPolicy", 0) == 1;
         low = (double) state.getProperty ("rangeLow", 0.0);
         high = (double) state.getProperty ("rangeHigh", 96000.0);
         const auto encoded = state["remapCurve"].toString();
@@ -55,7 +56,7 @@ public:
     }
     void updateRequestedIdentity()
     {
-        requestedIdentity = requestedAmount <= 0 || (formulaMode ? ! formulaRuntime || formulaRuntime->isIdentity() : isIdentity (requestedCurve));
+        requestedIdentity = requestedAmount <= 0 || (formulaMode ? formulaRuntime && formulaRuntime->isIdentity() : isIdentity (requestedCurve));
         // Keep the last processed mapping during a short return-to-identity
         // crossfade. Resetting its carrier immediately creates a phase jump.
         if (! requestedIdentity)
@@ -122,19 +123,31 @@ public:
             if (! selected || amount <= 0) { scratch[(size_t) b] += spectrum[b]; phase[(size_t) b] = 0; continue; }
             const double clampedSource = juce::jlimit (20.0, top, sourceHz);
             double destination = clampedSource;
-            if (activeFormulaMode && formulaRuntime)
+            bool validDestination = true;
+            if (activeFormulaMode)
             {
-                const auto mapped = formulaRuntime->evaluateHz (clampedSource);
-                if (! mapped.valid) { scratch[(size_t) b] += spectrum[b]; phase[(size_t) b] = 0; continue; }
-                // An explicitly out-of-range formula result is discarded before
-                // interpolation, including at partial Amount settings.
-                if (mapped.value < 20.0 || mapped.value > top) { phase[(size_t) b] = 0; continue; }
+                const auto mapped = formulaRuntime ? formulaRuntime->evaluateHz (clampedSource)
+                                                   : scrr::params::FormulaResult { clampedSource, false, -1 };
+                validDestination = mapped.valid;
                 destination = mapped.value;
             }
             else
             {
                 const double x = std::log (clampedSource / 20.0) / logRange;
-                destination = 20.0 * std::exp (evaluateCurve (x) * logRange);
+                const double mapped = evaluateCurve (x);
+                // Preserve exact endpoints instead of rounding a legal upper
+                // endpoint a few ulps beyond the host's processing limit.
+                destination = scrr::params::formulaExactEqual (mapped, 1.0) ? top
+                            : scrr::params::formulaExactEqual (mapped, 0.0) ? 20.0
+                            : 20.0 * std::exp (mapped * logRange);
+            }
+            if (! validDestination || ! std::isfinite (destination) || destination < 20.0 || destination > top)
+            {
+                // The policy concerns only this selected source bin, before
+                // Amount interpolation. Valid neighbours still run normally.
+                if (preserveInvalid) scratch[(size_t) b] += spectrum[b];
+                phase[(size_t) b] = 0;
+                continue;
             }
             const double delta = amount * (destination - clampedSource);
             if (std::abs (delta) < 1.0e-7)
@@ -172,7 +185,8 @@ private:
     static bool isIdentity (const scrr::params::TransferCurve& candidate) noexcept
     {
         for (const auto& p : candidate.points)
-            if (std::abs (p.x - p.y) > 1.0e-7f || std::abs (p.curve) > 1.0e-7f) return false;
+            if (! std::isfinite (p.x) || ! std::isfinite (p.y) || ! std::isfinite (p.curve)
+                || std::abs (p.x - p.y) > 1.0e-7f || std::abs (p.curve) > 1.0e-7f) return false;
         return true;
     }
     double evaluateCurve (double x) const noexcept
@@ -195,7 +209,7 @@ private:
     std::array<double, 2> activeMix {};
     std::array<bool, 2> hasProcessed {};
     bool requestedIdentity { true };
-    bool formulaMode {}, activeFormulaMode {};
+    bool formulaMode {}, activeFormulaMode {}, preserveInvalid {};
     double requestedAmount { 1 }, amount { 1 }, low {}, high { 96000 }, limit { 22050 };
     int channel {}, hop { 512 };
 };

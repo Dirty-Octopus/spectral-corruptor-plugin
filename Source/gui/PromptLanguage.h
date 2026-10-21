@@ -97,6 +97,8 @@ inline juce::String promptText (const juce::String& english)
         { "Save preset", u8"保存预设" }, { "Name this sound", u8"为此预设命名" },
         { "Save", u8"保存" }, { "Cancel", u8"取消" }, { "Invalid preset", u8"无效的预设" },
         { "Preset loaded", u8"预设已载入" }, { "Saved", u8"已保存" },
+        { "Random preset generated", u8"随机预设已生成" },
+        { "No room for random effects; remove some Notes first.", u8"没有足够位置生成随机效果，请先移除部分 Notes。" },
         { "Export preset", u8"导出预设" }, { "Import preset", u8"导入预设" },
         { "Use a preset name without path separators.", u8"预设名称不能包含路径分隔符。" },
         { "Invalid preset state.", u8"预设数据无效。" },

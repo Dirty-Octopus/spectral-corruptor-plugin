@@ -4,6 +4,7 @@
 #pragma once
 #include "Theme.h"
 #include "PromptLanguage.h"
+#include "RandomPresetSettings.h"
 #include "../PluginProcessor.h"
 #include "../PresetManager.h"
 
@@ -37,7 +38,7 @@ private:
     SpectralCrrptProcessor& processor;
     scrr::PresetManager manager;
     PresetButton preset { "Init" }, previous { "<" }, next { ">" };
-    juce::TextButton save { "SAVE" }, exportButton { "EXPORT" }, load { "IMPORT" };
+    juce::TextButton randomPreset { "RANDOM PRESET" }, save { "SAVE" }, exportButton { "EXPORT" }, load { "IMPORT" };
     juce::Label status;
     juce::String statusKey;
     int index { -1 };

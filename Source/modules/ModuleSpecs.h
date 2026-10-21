@@ -306,6 +306,7 @@ inline juce::ValueTree createDefaultModuleState (const juce::String& typeId)
     vt.setProperty ("type", typeId, nullptr);
     vt.setProperty ("enabled", false, nullptr);
     if (typeId == "Notes") vt.setProperty ("notes", juce::String(), nullptr);
+    if (typeId == "FrequencyRemap") vt.setProperty ("remapInvalidPolicy", 0, nullptr);
 
     if (auto* spec = findModuleSpec (typeId))
         for (const auto& p : spec->params)

@@ -112,7 +112,7 @@ TEST_CASE ("The entire preset row finishes hover animation without incidental re
     window.setBounds (80, 100, 1060, 40); bar.setBounds (0, 0, 920, 40); activation.setBounds (930, 0, 120, 40);
     window.addToDesktop (0); window.setVisible (true);
     std::vector<juce::Button*> buttons;
-    for (const auto& text : { "<", ">", "Init", "SAVE", "EXPORT", "IMPORT" })
+    for (const auto& text : { "<", ">", "Init", "RANDOM PRESET", "SAVE", "EXPORT", "IMPORT" })
     { auto* button = findButton (bar, text); REQUIRE (button != nullptr); buttons.push_back (button); }
     buttons.push_back (&activation);
     REQUIRE (waitForUI ([&] { return look.frames.size() == buttons.size(); }));
@@ -1831,6 +1831,7 @@ TEST_CASE ("Notes is a single editable Markdown area with preview, independent o
 #include "CurveCoordinateUiTests.h"
 #include "CurveCoordinateTests.h"
 #include "FormulaRoutingTests.h"
+#include "RandomPresetTests.h"
 
 int main (int argc, char** argv)
 {

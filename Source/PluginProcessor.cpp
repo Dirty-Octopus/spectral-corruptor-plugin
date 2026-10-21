@@ -4,6 +4,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "modules/ModuleSpecs.h"
+#include "RandomPreset.h"
 #include <cmath>
 
 namespace {
@@ -40,6 +41,7 @@ juce::ValueTree cleanModule (const juce::ValueTree& source)
     {
         const auto formula = scrr::params::RemapFormula::decode (source["remapFormula"].toString());
         result.setProperty ("remapMode", (int) source.getProperty ("remapMode", 0) == 1 ? 1 : 0, nullptr);
+        result.setProperty ("remapInvalidPolicy", (int) source.getProperty ("remapInvalidPolicy", 0) == 1 ? 1 : 0, nullptr);
         result.setProperty ("remapFormula", formula.encode(), nullptr);
         result.setProperty ("formulaView", source["formulaView"].toString().substring (0, 16384), nullptr);
         for (const auto& parameter : formula.parameters)
@@ -67,6 +69,19 @@ juce::ValueTree cleanModule (const juce::ValueTree& source)
         result.setProperty (key, juce::jlimit (0.0, mix ? 100.0 : 96000.0, value), nullptr);
     }
     return result;
+}
+void syncFormulaParameters (juce::ValueTree module, const juce::ValueTree& clean)
+{
+    for (int i = module.getNumProperties(); --i >= 0;)
+    {
+        const auto property = module.getPropertyName (i);
+        if (property.toString().startsWith ("formulaParam_") && ! clean.hasProperty (property)) module.removeProperty (property, nullptr);
+    }
+    for (int i = 0; i < clean.getNumProperties(); ++i)
+    {
+        const auto property = clean.getPropertyName (i);
+        if (property.toString().startsWith ("formulaParam_")) module.setProperty (property, clean[property], nullptr);
+    }
 }
 }
 
@@ -229,6 +244,41 @@ void SpectralCrrptProcessor::addModule (int channel, const juce::String& type)
     chain.addChild (module, stageInsertion (chain, module, -1), nullptr);
     presetDirty.store (true);
     publishRack (true);
+}
+
+bool SpectralCrrptProcessor::randomizePreset (int effectCount)
+{ return randomizePreset (effectCount, juce::Random::getSystemRandom().nextInt64()); }
+
+bool SpectralCrrptProcessor::randomizePreset (int effectCount, juce::int64 seed)
+{
+    const juce::ScopedLock lock (stateLock);
+    std::array<int, 4> capacity { maxModulesPerChain, maxModulesPerChain, maxModulesPerChain, maxModulesPerChain };
+    for (int ch = 1; ch <= 4; ++ch)
+        for (auto module : rackState.getChildWithName (chainNames[ch]))
+            if (module["type"].toString() == "Notes") --capacity[(size_t) (ch - 1)];
+    const int slices = juce::roundToInt (apvts.getRawParameterValue (scrr::params::id::freqSplitNumSplits)->load());
+    const double rate = getSampleRate() > 0 ? getSampleRate() : 48000.0;
+    auto generated = scrr::RandomPreset::generate (effectCount, seed, slices, juce::jmin ((double) getFrequencyLimit(), rate * .5), capacity);
+    if (generated.effectCount == 0) return false;
+    recordUndoState();
+    for (int ch = 1; ch <= 4; ++ch)
+    {
+        auto chain = rackState.getChildWithName (chainNames[ch]);
+        for (int i = chain.getNumChildren(); --i >= 0;)
+            if (chain.getChild (i)["type"].toString() != "Notes") chain.removeChild (i, nullptr);
+        // Copy because appending detaches a child from the generated chain.
+        const auto& generatedChain = generated.chains[(size_t) (ch - 1)];
+        for (auto module : generatedChain)
+        {
+            auto next = cleanModule (module);
+            chain.addChild (next, stageInsertion (chain, next, -1), nullptr);
+        }
+    }
+    presetDirty.store (true);
+    // Validation removes old effect bindings and bindings to those routes, while
+    // preserving global/modulator routes and all source/base values.
+    publishRack (true);
+    return true;
 }
 
 void SpectralCrrptProcessor::removeModule (int channel, int index)
@@ -399,16 +449,7 @@ void SpectralCrrptProcessor::setModuleParameter (int channel, const juce::String
             {
                 // Graph, parameter definitions, removed values and range clamps
                 // form one undo transaction; publication revalidates its routes.
-                for (int i = module.getNumProperties(); --i >= 0;)
-                {
-                    const auto property = module.getPropertyName (i);
-                    if (property.toString().startsWith ("formulaParam_") && ! clean.hasProperty (property)) module.removeProperty (property, nullptr);
-                }
-                for (int i = 0; i < clean.getNumProperties(); ++i)
-                {
-                    const auto property = clean.getPropertyName (i);
-                    if (property.toString().startsWith ("formulaParam_")) module.setProperty (property, clean[property], nullptr);
-                }
+                syncFormulaParameters (module, clean);
                 module.setProperty (key, clean[key], nullptr);
                 presetDirty.store (true); publishRack (true); return;
             }
@@ -418,6 +459,21 @@ void SpectralCrrptProcessor::setModuleParameter (int channel, const juce::String
             if (module["type"].toString() != "Notes" || key != juce::Identifier ("notes")) publishRack (false);
             return;
         }
+}
+
+void SpectralCrrptProcessor::setRemapFormulaState (int channel, const juce::String& uid,
+                                                 const juce::String& formula, const juce::String& view)
+{
+    const juce::ScopedLock lock (stateLock);
+    auto module = rackState.getChildWithName (chainNames[juce::jlimit (0, 4, channel)]).getChildWithProperty ("uid", uid);
+    if (module["type"].toString() != "FrequencyRemap") return;
+    auto candidate = module.createCopy();
+    candidate.setProperty ("remapFormula", formula, nullptr); candidate.setProperty ("formulaView", view, nullptr);
+    const auto clean = cleanModule (candidate);
+    if (module["remapFormula"] == clean["remapFormula"] && module["formulaView"] == clean["formulaView"]) return;
+    recordUndoState(); syncFormulaParameters (module, clean);
+    module.setProperty ("remapFormula", clean["remapFormula"], nullptr); module.setProperty ("formulaView", clean["formulaView"], nullptr);
+    presetDirty.store (true); publishRack (true);
 }
 
 juce::ValueTree SpectralCrrptProcessor::copyPresetState()
@@ -502,9 +558,9 @@ bool SpectralCrrptProcessor::applyPreset (const juce::ValueTree& preset)
     {
         auto dest = juce::ValueTree (name);
         auto source = preset.getChildWithName (name);
-        if (name == "ch1" && source.getNumChildren() == 0)
+        if (! applyingUndoState && name == "ch1" && source.getNumChildren() == 0)
             source = preset.getChildWithName ("modules");
-        if (name != "modules")
+        if (applyingUndoState || name != "modules")
             for (auto child : source)
             {
                 auto module = cleanModule (child);
@@ -513,7 +569,7 @@ bool SpectralCrrptProcessor::applyPreset (const juce::ValueTree& preset)
                     // History is our own validated state. Retain identities so
                     // restored mappings and subsequent redo still match it.
                     if (applyingUndoState) module.setProperty ("uid", child["uid"], nullptr);
-                    const auto key = name.substring (2) + ":" + child["uid"].toString();
+                    const auto key = (name == "modules" ? juce::String ("0") : name.substring (2)) + ":" + child["uid"].toString();
                     restoredIds.emplace (key, module["uid"].toString());
                     dest.appendChild (module, nullptr);
                 }

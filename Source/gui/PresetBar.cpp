@@ -5,9 +5,17 @@
 namespace scrr::gui {
 PresetBar::PresetBar (SpectralCrrptProcessor& p, juce::File libraryDirectory) : processor (p), manager (libraryDirectory)
 {
-    for (auto* b : std::array<juce::Button*, 6> { &preset, &previous, &next, &save, &exportButton, &load }) addAndMakeVisible (b);
+    for (auto* b : std::array<juce::Button*, 7> { &preset, &previous, &next, &randomPreset, &save, &exportButton, &load }) addAndMakeVisible (b);
     preset.onClick = [this] { showMenu(); }; previous.onClick = [this] { step (-1, previous.shiftClick); }; next.onClick = [this] { step (1, next.shiftClick); };
     save.onClick = [this] { saveLibrary(); }; exportButton.onClick = [this] { exportFile(); }; load.onClick = [this] { importFile(); };
+    randomPreset.setComponentID ("random-preset");
+    randomPreset.onClick = [this]
+    {
+        const bool generated = processor.randomizePreset (RandomPresetSettings::get());
+        setStatus (generated ? "Random preset generated" : "No room for random effects; remove some Notes first.");
+        timerCallback();
+    };
+    randomPreset.setTooltip ("Regenerate CH effects and parameters. Master/FFT settings, Notes and modulation sources stay unchanged. Undo restores the previous sound. Effect count is in Settings.");
     preset.setTooltip ("Factory and user presets. * means modified. Shift-click switches without saving; recover the previous state in Settings.");
     previous.setTooltip (preset.getTooltip()); next.setTooltip (preset.getTooltip());
     save.setTooltip ("Save a named preset to your user library.");
@@ -40,6 +48,7 @@ void PresetBar::resized()
     auto area = getLocalBounds();
     previous.setBounds (area.removeFromLeft (32).reduced (1)); next.setBounds (area.removeFromLeft (32).reduced (1));
     preset.setBounds (area.removeFromLeft (juce::jmin (340, getWidth() / 3)).reduced (3, 1));
+    randomPreset.setBounds (area.removeFromLeft (126).reduced (3, 1));
     save.setBounds (area.removeFromLeft (66).reduced (3, 1));
     exportButton.setBounds (area.removeFromLeft (80).reduced (3, 1)); load.setBounds (area.removeFromLeft (80).reduced (3, 1));
     status.setBounds (area.reduced (6, 1));

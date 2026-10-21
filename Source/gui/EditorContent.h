@@ -82,6 +82,7 @@ private:
     SpectralEqEditor eqEditor;
     TransferCurveEditor remapEditor;
     RemapFormulaEditor remapFormula;
+    juce::ComboBox remapInvalidPolicy;
     juce::TextButton remapEditMode { "EDIT" }, remapFormulaMode { "FORMULA" };
     juce::TextButton remapReset { "RESET MAP" }, remapReverse { "REVERSE MAP" };
     std::shared_ptr<scrr::updates::UpdateService> updates;

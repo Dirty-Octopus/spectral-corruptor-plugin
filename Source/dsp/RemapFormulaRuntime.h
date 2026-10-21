@@ -44,8 +44,15 @@ public:
         if (! dirty) return;
         dirty = false; ++buildCount;
         errorNode.store (-1, std::memory_order_relaxed); invalidCount.store (0, std::memory_order_relaxed);
-        identity = ! program || ! program->valid;
-        if (identity) { recordError (-1); return; }
+        identity = false;
+        if (! program || ! program->valid)
+        {
+            // Invalid authoring state is not an identity function. Clear a
+            // previous executable map so the module's invalid-bin policy also
+            // applies after disconnecting output or introducing a graph error.
+            activeProgram = program; activeValues = values; affineReady = false;
+            recordError (-1); return;
+        }
         const double nextInputLow = program->unit == scrr::params::FormulaUnit::Normalized ? 0.0 : 20.0;
         const double nextInputHigh = program->unit == scrr::params::FormulaUnit::Normalized ? 1.0 : top;
         bool nextAffineReady = false;
@@ -72,9 +79,9 @@ public:
         outputLow = nextOutputLow; outputHigh = nextOutputHigh;
     }
 
-    /** Destination Hz. Finite out-of-range output means discard; invalid math
-        means preserve this source and expose a diagnostic. Display settings
-        and plot sampling precision do not change this evaluation. */
+    /** Destination Hz plus validity. FrequencyRemap applies its selected policy
+        to invalid math and finite out-of-range output. Display settings and
+        plot sampling precision do not change this evaluation. */
     scrr::params::FormulaResult evaluateHz (double hz) const noexcept
     {
         if (! activeProgram || ! activeProgram->valid || top <= 20 || ! std::isfinite (hz)) return { hz, false, -1 };
@@ -87,7 +94,9 @@ public:
         if (activeProgram->unit == scrr::params::FormulaUnit::Hertz) return result;
         if (result.value < 0) return { 0, true, -1 };
         if (result.value > 1) return { top + 1, true, -1 };
-        return { 20.0 * std::exp (result.value * logRange), true, -1 };
+        return { scrr::params::formulaExactEqual (result.value, 1.0) ? top
+               : scrr::params::formulaExactEqual (result.value, 0.0) ? 20.0
+               : 20.0 * std::exp (result.value * logRange), true, -1 };
     }
     bool isIdentity() const noexcept { return identity; }
     bool usesAffineCache() const noexcept { return affineReady; }

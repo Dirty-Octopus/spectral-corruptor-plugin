@@ -48,6 +48,9 @@ public:
     // Returned trees are detached copies. All rack writes go through these methods.
     juce::ValueTree getModuleChain (int channel) const;
     juce::ValueTree copyPresetState();
+    // Replace CH audio effects only. Globals, Notes, sources and ALL are retained.
+    bool randomizePreset (int effectCount);
+    bool randomizePreset (int effectCount, juce::int64 seed);
     void addModule (int channel, const juce::String& typeId);
     void removeModule (int channel, int index);
     void moveModule (int channel, int fromIndex, int toIndex);
@@ -56,6 +59,8 @@ public:
     juce::String pasteModule (int channel, const juce::String& clipboard);
     void setModuleParameter (int channel, const juce::String& uid,
                              const juce::Identifier& key, const juce::var& value);
+    void setRemapFormulaState (int channel, const juce::String& uid,
+                               const juce::String& formula, const juce::String& view);
     bool applyPreset (const juce::ValueTree&);
     // The single recovery slot belongs to this instance and only travels in host state.
     bool switchPreset (const juce::ValueTree&, const juce::String& name, bool keepRecovery);

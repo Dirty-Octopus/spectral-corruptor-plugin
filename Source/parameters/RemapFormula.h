@@ -133,7 +133,7 @@ struct RemapFormula
         if (unitValue < 0 || unitValue > 1) return fail ("Unknown formula units.");
         const auto* nodeArray = root->getProperty ("nodes").getArray();
         const auto* parameterArray = root->getProperty ("parameters").getArray();
-        if (! nodeArray || nodeArray->isEmpty() || nodeArray->size() > (int) maxNodes
+        if (! nodeArray || nodeArray->size() > (int) maxNodes
             || ! parameterArray || parameterArray->size() > (int) maxParameters) return fail ("Formula supports 64 nodes and 16 parameters.");
         RemapFormula result; result.unit = (FormulaUnit) unitValue; result.outputNode = (int) root->getProperty ("output"); result.nodes.clear();
         for (const auto& item : *nodeArray)
@@ -149,7 +149,6 @@ struct RemapFormula
             node.canvasX = (double) object->getProperty ("x"); node.canvasY = (double) object->getProperty ("y");
             if (! std::isfinite (node.value) || ! std::isfinite (node.canvasX) || ! std::isfinite (node.canvasY)
                 || node.parameterId.length() > 48) return fail ("Invalid node value.");
-            node.canvasX = juce::jlimit (-10000.0, 10000.0, node.canvasX); node.canvasY = juce::jlimit (-10000.0, 10000.0, node.canvasY);
             result.nodes.push_back (std::move (node));
         }
         for (const auto& item : *parameterArray)
@@ -169,6 +168,27 @@ struct RemapFormula
 };
 
 struct FormulaResult { double value {}; bool valid { true }; int errorNode { -1 }; };
+
+enum class FormulaTraceStatus { NotEvaluated, Value, Error };
+struct FormulaTraceNode
+{
+    int nodeId { -1 };
+    double value {};
+    FormulaTraceStatus status { FormulaTraceStatus::NotEvaluated };
+};
+struct FormulaTrace
+{
+    FormulaResult result;
+    std::array<FormulaTraceNode, RemapFormula::maxNodes> nodes {};
+    size_t nodeCount {};
+
+    const FormulaTraceNode* find (int nodeId) const noexcept
+    {
+        for (size_t i = 0; i < nodeCount; ++i)
+            if (nodes[i].nodeId == nodeId) return &nodes[i];
+        return nullptr;
+    }
+};
 
 /** Fixed-size, topologically ordered scalar program. Evaluation neither allocates
     nor parses strings, and invalid domains never propagate NaN into audio. */
@@ -207,7 +227,8 @@ struct FormulaProgram
     {
         FormulaProgram program; program.unit = formula.unit;
         auto fail = [&] (juce::String message) { program.error = std::move (message); return program; };
-        if (formula.nodes.empty() || formula.nodes.size() > RemapFormula::maxNodes || formula.parameters.size() > RemapFormula::maxParameters)
+        if (formula.nodes.empty()) return fail ("Connect a node to output y.");
+        if (formula.nodes.size() > RemapFormula::maxNodes || formula.parameters.size() > RemapFormula::maxParameters)
             return fail ("Formula supports 64 nodes and 16 parameters.");
         for (const auto& parameter : formula.parameters)
         {
@@ -273,6 +294,29 @@ struct FormulaProgram
 
     FormulaResult evaluate (double x, const std::array<double, RemapFormula::maxParameters>& values) const noexcept
     {
+        return evaluateImpl<false> (x, values, nullptr);
+    }
+
+    /** UI probe in the program's native units, with the caller's effective
+        parameter values. Only output-reachable compiled nodes are included.
+        Failed nodes report Error; execution stops exactly where evaluate does,
+        leaving later nodes NotEvaluated. An invalid program or nonfinite x
+        leaves every node NotEvaluated and returns the usual invalid result. */
+    FormulaTrace evaluateTrace (double x, const std::array<double, RemapFormula::maxParameters>& values) const noexcept
+    {
+        FormulaTrace trace; trace.nodeCount = instructionCount;
+        for (size_t i = 0; i < instructionCount; ++i) trace.nodes[i].nodeId = instructions[i].nodeId;
+        trace.result = evaluateImpl<true> (x, values, &trace);
+        return trace;
+    }
+
+private:
+    // The audio specialization has no trace storage, writes or runtime branch.
+    // Keeping the switch shared makes UI readouts use identical arithmetic.
+    template <bool Trace>
+    FormulaResult evaluateImpl (double x, const std::array<double, RemapFormula::maxParameters>& values,
+                                FormulaTrace* trace) const noexcept
+    {
         if (! valid || ! std::isfinite (x)) return { x, false, -1 };
         std::array<double, RemapFormula::maxNodes> results {};
         for (size_t i = 0; i < instructionCount; ++i)
@@ -309,7 +353,16 @@ struct FormulaProgram
                 case FormulaOp::Modulo: domain = ! formulaExactEqual (b, 0); if (domain) result = std::fmod (a, b); break;
                 case FormulaOp::Sign: result = a > 0 ? 1 : (a < 0 ? -1 : 0); break;
             }
-            if (! domain || ! std::isfinite (result)) return { x, false, instruction.nodeId };
+            if (! domain || ! std::isfinite (result))
+            {
+                if constexpr (Trace) trace->nodes[i].status = FormulaTraceStatus::Error;
+                return { x, false, instruction.nodeId };
+            }
+            if constexpr (Trace)
+            {
+                trace->nodes[i].value = result;
+                trace->nodes[i].status = FormulaTraceStatus::Value;
+            }
             results[i] = result;
         }
         return { results[(size_t) outputIndex], true, -1 };

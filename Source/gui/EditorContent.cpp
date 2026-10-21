@@ -21,6 +21,11 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     inspector.addChildComponent (eqEditor);
     inspector.addChildComponent (remapEditor);
     inspector.addChildComponent (remapFormula);
+    inspector.addChildComponent (remapInvalidPolicy); remapInvalidPolicy.setComponentID ("remap-invalid-policy");
+    remapInvalidPolicy.addItem ("INVALID OUTPUT: SILENCE", 1); remapInvalidPolicy.addItem ("INVALID OUTPUT: ORIGINAL FREQUENCY", 2);
+    remapInvalidPolicy.setTooltip ("Undefined destinations or destinations outside the audio frequency range: silence the affected source frequencies, or retain their original frequency. Shared with Formula Settings.");
+    remapInvalidPolicy.onChange = [this]
+    { if (remapInvalidPolicy.isVisible()) processor.setModuleParameter (channel, selectedUid, "remapInvalidPolicy", remapInvalidPolicy.getSelectedId() == 2 ? 1 : 0); };
     inspector.addChildComponent (remapEditMode); inspector.addChildComponent (remapFormulaMode);
     remapEditMode.setComponentID ("remap-mode-edit"); remapFormulaMode.setComponentID ("remap-mode-formula");
     const auto selectRemapMode = [this] (int mode)
@@ -35,6 +40,11 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     {
         if (remapFormula.isVisible() && remapFormula.getModuleUid() == selectedUid)
             processor.setModuleParameter (channel, selectedUid, property, value);
+    };
+    remapFormula.onGraphAndViewChange = [this] (const juce::String& formula, const juce::String& view)
+    {
+        if (remapFormula.isVisible() && remapFormula.getModuleUid() == selectedUid)
+            processor.setRemapFormulaState (channel, selectedUid, formula, view);
     };
     remapFormula.mappingMenu = [this] (juce::Component& target, const juce::Identifier& parameter)
     {
@@ -375,7 +385,7 @@ void EditorContent::timerCallback()
     if (remapFormula.isVisible())
     {
         const auto current = processor.getModuleChain (channel).getChildWithProperty ("uid", selectedUid);
-        if (current.isValid() && ! remapFormula.isEditing()) remapFormula.setState (current);
+        if (current.isValid()) remapFormula.setState (current);
         remapFormula.refreshPreview();
     }
     for (int i = 0; i < 4; ++i)
@@ -782,7 +792,7 @@ void EditorContent::rebuildInspector()
     controls.clear(); common.clear(); selectedName.clear(); selectedDescription.clear();
     const bool valid = selected >= 0;
     remapEditor.setVisible (false); remapReset.setVisible (false); remapReverse.setVisible (false); processingStatus.setVisible (false);
-    remapFormula.setVisible (false); remapEditMode.setVisible (false); remapFormulaMode.setVisible (false);
+    remapFormula.setVisible (false); remapInvalidPolicy.setVisible (false); remapEditMode.setVisible (false); remapFormulaMode.setVisible (false);
     notesPanel.setVisible (false); eqEditor.setVisible (false); shownEqBand = -1; inspectorViewport.setVisible (true);
     card.setVisible (valid);
     enabled.setVisible (valid);
@@ -866,6 +876,8 @@ void EditorContent::rebuildInspector()
         remapFormula.setState (child); remapFormula.setVisible (formula); wireFormulaSliders();
         shownRemapLimit = 0; updateRemapAxes();
         remapEditor.setVisible (! formula); remapReset.setVisible (! formula); remapReverse.setVisible (! formula);
+        remapInvalidPolicy.setSelectedId ((int) child.getProperty ("remapInvalidPolicy", 0) == 1 ? 2 : 1, juce::dontSendNotification);
+        remapInvalidPolicy.setVisible (! formula);
     }
     if (type == "SpectralEqualizer")
     {
@@ -1207,7 +1219,8 @@ void EditorContent::resized()
         {
             remapEditor.setBounds (0, 34, width, 190);
             remapReset.setBounds (0, 230, 112, 24); remapReverse.setBounds (120, 230, 124, 24);
-            controlY = 264;
+            remapInvalidPolicy.setBounds (0, 264, width, 26);
+            controlY = 300;
         }
         else
         {

@@ -141,7 +141,8 @@ TEST_CASE ("Formula workspace sliders use ordinary Macro and modulation routes")
     editor->setWantsKeyboardFocus (true); editor->toFront (true); editor->grabKeyboardFocus(); pump (200);
     auto* mode = dynamic_cast<juce::Button*> (findID (*editor, "remap-mode-formula")); REQUIRE (mode != nullptr); mode->onClick(); pump (100);
     auto* formula = dynamic_cast<scrr::gui::RemapFormulaEditor*> (findID (*editor, "remap-formula-editor")); REQUIRE (formula != nullptr); REQUIRE (formula->isVisible());
-    auto* add = findButton (*formula, "ADD PARAM"); REQUIRE (add != nullptr); add->onClick(); pump (100);
+    formulaUiTests::click (*formula, { 360, 280 }, true); formulaUiTests::chooseMenu (500);
+    REQUIRE (waitForUI ([&] { return formula->getParameterSliders().size() == 1; }));
     const auto sliders = formula->getParameterSliders(); REQUIRE (sliders.size() == 1);
     sliders.front()->mouseDown (mouse (*sliders.front(), { 10, 10 }, false, juce::ModifierKeys::rightButtonModifier)); chooseMenu (1);
     REQUIRE (p->getMacroMappings().size() == 1); REQUIRE (p->getMacroMappings()[0].parameter.toString() == sliders.front()->getComponentID());
