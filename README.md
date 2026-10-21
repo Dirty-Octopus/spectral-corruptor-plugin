@@ -20,9 +20,19 @@ All plugin DSP, modules, GUI, macros, modulation, state/preset management and bu
 
 **The default build compiles but cannot process input audio.** It outputs only pink noise, including with internal bypass or Dry/Wet at zero. No activation string or official `.sclicense` file can unlock the supplied placeholder. Implement your own backend before using your build. See [licensing integration](docs/LICENSING.md).
 
-## v0.2.0
+## v0.2.5
 
-Includes Spectral Clipper, an eight-band Spectral Equalizer, Shift preset recovery, chain-style modulation management with Audio Follower, drag-to-parameter routing, named HEX colour profiles and a bilingual Quick Guide. See [the interaction guide](docs/V0_2_UX.md).
+This is a source update. The corresponding official binary Release is deferred.
+
+The library now contains 38 audio effects in eight folders. This version adds:
+
+- Blackman-Harris, Gaussian, Flat Top, Welch and Triangle FFT windows, plus a custom 2–16x Overlap factor with the actual overlap factor, percentage and hop size displayed.
+- Frequency Remap with editable curves or formula node graphs in Hz and logarithmic normalized coordinates. Custom formula parameters create sliders that accept Macro and modulation assignments.
+- An independent response curve for each Mapping route. Remap, LFO Custom and Mapping curve nodes support separate X/Y assignments; EQ nodes support Frequency/Gain assignments. Right-click assigns a coordinate, and double-click deletes an internal curve node.
+- A PARTIAL folder containing Stretcher, Stiff String, Centroid, P Grid and F Grid. These stages preserve slice identity while moving or resynthesizing its sound, with Band Centre/Energy Centroid anchors and Sine/Triangle/Saw/Square resynthesis. They require more than one Frequency Slice; Solo requires Post Split.
+- Per-effect resource accounting and visible bypass status when an effect exceeds the memory budget, while other stages continue and controls remain editable.
+
+See the [FFT, Remap, Partial and curve guide](docs/SPECTRAL_REMAP_PARTIALS.md). Existing Spectral Clipper, eight-band Spectral Equalizer, Shift preset recovery, Audio Follower, drag-to-parameter routing, colour profiles and bilingual Quick Guide remain available; see [the interaction guide](docs/V0_2_UX.md).
 
 The source edition does not download or install official binaries over your own build. Update this source repository and rebuild. JUCE's standard SHA-256 utility remains linked for source compatibility; the official activation backend, native verification implementation and keys remain excluded.
 
@@ -42,7 +52,7 @@ The source edition is named **Spectral Corruptor Source** and has a separate plu
 
 Default CI tests the DSP foundation and verifies that the supplied placeholder stays locked and no factory presets are bundled. After implementing your backend, configure with `-DSCR_TEST_LICENSE_PLACEHOLDER=OFF -DSCR_BUILD_PROCESSOR_TESTS=ON` to build the published processor/UI regressions. Your backend must make test instances usable through its normal lifecycle; no working unlock implementation or official test credentials are provided.
 
-[Harmonics](docs/HARMONIC_EFFECTS.md) · [Spectral shapes](docs/SPECTRAL_SHAPES.md) · [Macros and modulation](docs/MACROS.md) · [GENERIC effects](docs/GENERIC.md)
+[FFT, Remap and Partials](docs/SPECTRAL_REMAP_PARTIALS.md) · [Harmonics](docs/HARMONIC_EFFECTS.md) · [Spectral shapes](docs/SPECTRAL_SHAPES.md) · [Macros and modulation](docs/MACROS.md) · [GENERIC effects](docs/GENERIC.md)
 
 ## Licensing
 

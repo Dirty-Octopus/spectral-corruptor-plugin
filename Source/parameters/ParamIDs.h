@@ -15,6 +15,8 @@ namespace id {
     inline const juce::String fftSizeExtended { "global.fftSizeExtended" };
     inline const std::array<juce::String, 4> channelEnabled { "channel.1.enabled", "channel.2.enabled", "channel.3.enabled", "channel.4.enabled" };
     inline const juce::String windowType   { "global.windowType" };
+    inline const juce::String windowTypeExtended { "global.windowTypeExtended" };
+    inline const juce::String overlapFactor { "global.overlapFactor" };
     inline const juce::String drywet       { "global.drywet" };
     inline const juce::String inputGain    { "global.inputGain" };
     inline const juce::String outputGain   { "global.outputGain" };
@@ -34,6 +36,7 @@ namespace choice {
     inline const juce::StringArray fftSize    { "1024", "2048", "4096", "8192" };
     inline const juce::StringArray fftSizeExtended { "Legacy automation", "128", "256", "512", "1024", "2048", "4096", "8192", "16384", "32768" };
     inline const juce::StringArray windowType { "Hann", "Hamming", "Blackman", "Rectangular" };
+    inline const juce::StringArray windowTypeExtended { "Legacy automation", "Hann", "Hamming", "Blackman", "Rectangular", "Blackman-Harris", "Gaussian", "Flat Top", "Welch", "Triangle" };
 } // namespace choice
 
 inline float frequencyLimitValue (const juce::AudioProcessorValueTreeState& v)

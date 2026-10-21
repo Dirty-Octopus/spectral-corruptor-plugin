@@ -15,6 +15,8 @@
 #include "NotesPanel.h"
 #include "QuickGuide.h"
 #include "SpectralEqEditor.h"
+#include "components/TransferCurveEditor.h"
+#include "components/RemapFormulaEditor.h"
 #include "EffectBrowser.h"
 #include "ModuleRow.h"
 #include "components/ParameterPanel.h"
@@ -61,6 +63,10 @@ private:
     void refreshLanguage();
     void updateCardParameters();
     void refreshMacroControls();
+    void updateProcessingStatus();
+    void updatePartialControls();
+    void updateRemapAxes();
+    void wireFormulaSliders();
     void macroMenu (juce::Component&, int channel, const juce::String& uid, const juce::Identifier& parameter);
     SpectralCrrptProcessor& processor;
     InstrumentLookAndFeel look;
@@ -74,6 +80,10 @@ private:
     SettingsPanel settingsPanel;
     QuickGuide quickGuide;
     SpectralEqEditor eqEditor;
+    TransferCurveEditor remapEditor;
+    RemapFormulaEditor remapFormula;
+    juce::TextButton remapEditMode { "EDIT" }, remapFormulaMode { "FORMULA" };
+    juce::TextButton remapReset { "RESET MAP" }, remapReverse { "REVERSE MAP" };
     std::shared_ptr<scrr::updates::UpdateService> updates;
     juce::TextButton updateNotice;
     uint64_t shownThemeRevision {};
@@ -94,7 +104,8 @@ private:
     ModulationPage modulationPage;
     juce::TextButton modulationButton { "MODULATION" };
     SpectrogramDisplay inputSpectrum, outputSpectrum;
-    AssignableSlider dryWet, inputGain, outputGain, splitCount, crossfade;
+    AssignableSlider dryWet, inputGain, outputGain, splitCount, crossfade, overlapFactor;
+    juce::Label overlapActual, processingStatus;
     juce::ComboBox fftSize, oversample, window;
     juce::ToggleButton bypass { "BYPASS" }, solo { "SOLO" }, post { "POST SPLIT" };
     ChannelTab tabs[4];
@@ -139,7 +150,12 @@ private:
     double orderNoticeUntil {};
     int dropChannel {};
     int shownSplits {};
+    int shownEffectiveSplits { 1 }, shownActualFFT {}, shownActualHop {};
+    bool shownPartialSoloBypass {};
+    bool shownResourceLimited {};
+    size_t shownResourceRequired {}, shownResourceAvailable {}, shownResourceBudget {};
     float shownFrequencyLimit {};
+    double shownRemapLimit {};
     int shownUiScale { UiScale::get() };
 };
 } // namespace scrr::gui

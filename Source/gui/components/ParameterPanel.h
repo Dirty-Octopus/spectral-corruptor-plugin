@@ -87,6 +87,16 @@ private:
 
 inline juce::String moduleDescription (const juce::String& type)
 {
+    if (scrr::dsp::isPartialEffect (type))
+    {
+        const auto effect = type == "PartialStretcher" ? "Stretch partial ratios around Reference."
+            : type == "PartialStiffString" ? "Increase the upper partial spacing like a stiff string."
+            : type == "PartialCentroid" ? "Move partial anchors toward Target."
+            : type == "PartialPGrid" ? "Snap partial anchors to a pitch grid measured in semitones."
+            : "Snap partial anchors to a grid measured in Hz.";
+        return juce::String (effect) + " Requires at least two frequency slices. Anchor selects band centre or energy centroid. Scale moves each band's contents; Resynth rebuilds a partial at its target. Controls remain editable while splitting is off.";
+    }
+    if (type == "FrequencyRemap") return "Move input frequencies to the curve's output frequencies before the next effect. Both axes are logarithmic. LOW/HIGH select source material; moved frequencies may leave that range. Double-click to add points; drag hollow handles to bend segments.";
     if (type == "SpectralClipper") return "Limit FFT-bin magnitude while preserving phase. Window-calibrated Threshold, Drive, Knee and Output. Not a sample-peak limiter.";
     if (type == "SpectralEqualizer") return "Eight spectral EQ bands. Drag nodes for frequency/gain, scroll for Q and double-click to reset. Right-click numeric controls to assign modulation.";
 

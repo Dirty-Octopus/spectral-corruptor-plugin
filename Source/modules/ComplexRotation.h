@@ -48,7 +48,7 @@ public:
         if (randomAmount)
         {
             const uint32_t random = randomAmountSource.next (91357, true, randomRate,
-                                                             numBins, sampleRate, 0x434d504cu);
+                                                             numBins, sampleRate, 0x434d504cu, getHopSize (numBins));
             const float swing = 0.05f + 1.95f * FrameRandomSource::toUnitFloat (random);
             effectiveAmount = juce::jlimit (0.0f, 1.0f, amount * swing);
         }

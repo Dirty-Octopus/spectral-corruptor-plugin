@@ -21,6 +21,7 @@ public:
     void prepare (double sampleRate, int numBins) override
     {
         juce::ignoreUnused (sampleRate);
+        auto& mask = scratchBuffer (ownMask);
         mask.resize ((size_t) numBins);
 
         frameCounter = 0;
@@ -51,6 +52,7 @@ public:
 
     void processSpectrum (std::complex<float>* spectrum, int numBins, double sampleRate) override
     {
+        auto& mask = scratchBuffer (ownMask);
         juce::ignoreUnused (sampleRate);
 
         if (! enabled || amount <= 0.0f || numBins <= 2)
@@ -91,7 +93,7 @@ private:
 
     int frameCounter { 0 };
 
-    std::vector<uint8_t> mask;
+    std::vector<uint8_t> ownMask;
 };
 
 } // namespace scrr::dsp

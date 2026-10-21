@@ -19,6 +19,8 @@ public:
     void prepare (double sampleRate, int numBins) override
     {
         juce::ignoreUnused (sampleRate);
+        auto& currentPhase = scratchBuffer (ownCurrentPhase, 0);
+        auto& currentMag = scratchBuffer (ownCurrentMag, 1);
         previousPhase.assign ((size_t) numBins, 0.0f);
         currentPhase.assign ((size_t) numBins, 0.0f);
         previousMag.assign ((size_t) numBins, 0.0f);
@@ -36,6 +38,8 @@ public:
 
     void processSpectrum (std::complex<float>* spectrum, int numBins, double sampleRate) override
     {
+        auto& currentPhase = scratchBuffer (ownCurrentPhase, 0);
+        auto& currentMag = scratchBuffer (ownCurrentMag, 1);
         juce::ignoreUnused (sampleRate);
 
         if (numBins <= 2)
@@ -97,9 +101,9 @@ private:
     float amount { 0.0f };
     bool hasPrevious { false };
     std::vector<float> previousPhase;
-    std::vector<float> currentPhase;
+    std::vector<float> ownCurrentPhase;
     std::vector<float> previousMag;
-    std::vector<float> currentMag;
+    std::vector<float> ownCurrentMag;
 };
 
 } // namespace scrr::dsp

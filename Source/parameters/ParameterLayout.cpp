@@ -70,6 +70,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     // Append new parameters so existing DAW automation indices remain stable.
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { id::frequencyLimit, 4 }, "Spectral Frequency Limit", choice::frequencyLimit, 2));
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { id::windowTypeExtended, 5 }, "Window Extended", choice::windowTypeExtended, 0));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { id::overlapFactor, 5 }, "Overlap Factor",
+        NormalisableRange<float> (2.0f, 16.0f, .01f), 4.0f,
+        AudioParameterFloatAttributes().withLabel ("x")));
     return layout;
 }
 

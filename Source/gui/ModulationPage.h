@@ -7,6 +7,7 @@
 #include "AssignableSlider.h"
 #include "PromptLanguage.h"
 #include "../PluginProcessor.h"
+#include "components/CurveCoordinateMenu.h"
 #include <deque>
 
 namespace scrr::gui {
@@ -17,7 +18,9 @@ class ModulationCurve : public juce::Component, public juce::SettableTooltipClie
 public:
     scrr::params::ModulationSource source;
     std::function<void(scrr::params::ModulationSource)> changed;
-    ModulationCurve() { setTooltip ("Double-click empty space: add. Right/double-click a point: delete (endpoints stay). Drag a hollow midpoint up/down to bend the segment."); }
+    std::function<void(juce::Component&, uint32_t)> nodeMenu;
+    void setPreviewSource (const scrr::params::ModulationSource& next) { previewSource = next; repaint(); }
+    ModulationCurve() { setTooltip ("Double-click empty space: add. Double-click a point: delete (endpoints stay). Right-click a point: assign X or Y to a Macro or modulation source. Drag a hollow midpoint to bend the segment."); }
     void tick (float value, float phase)
     {
         output = value; playhead = phase;
@@ -51,6 +54,18 @@ public:
             }
         }
         g.setColour (accent); g.strokePath (line, juce::PathStrokeType (2.5f));
+        if (! source.envelope && ! source.random && source.shape == 5 && previewSource.uid == source.uid && ! previewSource.points.empty())
+        {
+            juce::Path effective;
+            for (int i = 0; i <= 256; ++i)
+            {
+                const double x = (double) i / 256;
+                const float y = i == 256 ? previewSource.points.back().y : previewSource.valueAt (x);
+                const juce::Point<float> p (a.getX() + (float) x * a.getWidth(), a.getBottom() - y * a.getHeight());
+                if (i == 0) effective.startNewSubPath (p); else effective.lineTo (p);
+            }
+            g.setColour (Theme::yellow()); g.strokePath (effective, juce::PathStrokeType (1.3f));
+        }
         if (! source.envelope && ! source.random)
         {
             g.setColour (Theme::white().withAlpha (.7f)); g.drawVerticalLine ((int) (a.getX() + playhead * a.getWidth()), a.getY(), a.getBottom());
@@ -70,12 +85,18 @@ public:
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (source.envelope || source.random) return;
+        if (e.mods.isPopupMenu())
+        {
+            selected = curveSegment = -1;
+            if (source.shape != 5) return;
+            const int point = nearest (e.position);
+            if (point >= 0 && nodeMenu) nodeMenu (*this, source.points[(size_t) point].id);
+            return;
+        }
         ensureCustom(); selected = -1; curveSegment = -1;
         const int handle = nearestHandle (e.position);
         if (handle >= 0 && ! e.mods.isPopupMenu()) { beginCurve (handle, e); return; }
         selected = nearest (e.position);
-        if (e.mods.isPopupMenu() && selected > 0 && selected + 1 < (int) source.points.size())
-        { source.points.erase (source.points.begin() + selected); selected = -1; submit(); }
     }
     void mouseDrag (const juce::MouseEvent& e) override
     {
@@ -105,7 +126,7 @@ public:
         if (source.points.size() >= 64) return;
         const auto a = plot(); const float x = juce::jlimit (.001f, .999f, (e.position.x - a.getX()) / a.getWidth());
         for (auto p : source.points) if (std::abs (p.x - x) < .002f) return;
-        source.points.push_back ({ x, juce::jlimit (0.0f, 1.0f, (a.getBottom() - e.position.y) / a.getHeight()) });
+        source.points.push_back ({ x, juce::jlimit (0.0f, 1.0f, (a.getBottom() - e.position.y) / a.getHeight()), 0, source.allocatePointId() });
         std::sort (source.points.begin(), source.points.end(), [] (auto p, auto q) { return p.x < q.x; }); submit();
     }
     void mouseUp (const juce::MouseEvent&) override { selected = curveSegment = -1; repaint(); }
@@ -116,6 +137,7 @@ public:
     }
     void mouseExit (const juce::MouseEvent&) override { hoverSegment = -1; repaint(); }
 private:
+    scrr::params::ModulationSource previewSource;
     juce::Rectangle<float> plot() const { return getLocalBounds().toFloat().reduced (8); }
     juce::Point<float> curveHandle (int segment) const
     {
@@ -133,7 +155,7 @@ private:
     {
         if (source.shape == 5) return;
         source.points.clear();
-        for (int i = 0; i <= 8; ++i) source.points.push_back ({ (float) i / 8, source.valueAt (juce::jmin (.999999, (double) i / 8)) });
+        for (int i = 0; i <= 8; ++i) source.points.push_back ({ (float) i / 8, source.valueAt (juce::jmin (.999999, (double) i / 8)), 0, source.allocatePointId() });
         source.shape = 5; submit();
     }
     int nearest (juce::Point<float> point) const
@@ -201,7 +223,18 @@ public:
         output.setComponentID ("modulation-output-" + source.uid);
         output.drag = [this] (juce::Point<int> screen, bool finish) { if (dragOutput) dragOutput (source.uid, screen, finish); };
         addAndMakeVisible (output);
-        curve.source = source; curve.changed = [this] (auto next) { source.points = std::move (next.points); source.shape = next.shape; shape.setSelectedItemIndex (source.shape, juce::dontSendNotification); submit(); }; addAndMakeVisible (curve);
+        curve.source = source; curve.changed = [this] (auto next) { source = std::move (next); shape.setSelectedItemIndex (source.shape, juce::dontSendNotification); submit(); }; addAndMakeVisible (curve);
+        curve.nodeMenu = [this] (juce::Component& target, uint32_t point)
+        {
+            const auto safe = juce::Component::SafePointer<ModulatorCard> (this);
+            const auto targetUid = source.uid;
+            showCurveCoordinateMenu (target, source.canMapCoordinate (point, true), source.canMapCoordinate (point, false),
+                "Time", "Value", [safe, targetUid, point] (bool xAxis)
+                {
+                    if (! safe || safe->source.uid != targetUid || ! safe->source.canMapCoordinate (point, xAxis)) return;
+                    if (safe->mappingMenu) safe->mappingMenu (safe->curve, targetUid, scrr::params::curveCoordinateParameter (point, xAxis));
+                });
+        };
         if (source.envelope || source.random) curve.setTooltip ("Live modulation output history.");
         if (source.envelope)
         {
@@ -269,7 +302,21 @@ public:
             if (! slider->isMouseButtonDown()) slider->setValue (source.parameterValue (parameter), juce::dontSendNotification);
         }
         if (mappingHeight() != oldHeight) resized();
-        curve.source = source; curve.tick (value, phase); repaint();
+        curve.source = source;
+        if (! source.envelope && ! source.random && source.shape == 5)
+        {
+            auto effective = source;
+            for (auto& point : effective.points)
+            {
+                point.x = (float) processor.getEffectiveValue (scrr::params::MacroMapping::modulationChannel, source.uid,
+                    scrr::params::curveCoordinateParameter (point.id, true), point.x);
+                point.y = (float) processor.getEffectiveValue (scrr::params::MacroMapping::modulationChannel, source.uid,
+                    scrr::params::curveCoordinateParameter (point.id, false), point.y);
+            }
+            scrr::params::TransferCurve::constrainCoordinates (effective.points.data(), effective.points.size(), false, false, source.points.data());
+            curve.setPreviewSource (effective);
+        }
+        curve.tick (value, phase); repaint();
     }
     void resized() override
     {

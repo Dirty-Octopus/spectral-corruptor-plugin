@@ -12,14 +12,21 @@ namespace scrr::dsp {
 class FrequencySplit
 {
 public:
+    struct SliceWeights
+    {
+        int first {}, second { -1 };
+        float firstWeight { 1.0f }, secondWeight {};
+    };
+
     FrequencySplit (double hostRate, int count, float crossfade)
         : slices (std::clamp (count, 1, 64)), cfRange (std::clamp (crossfade, 0.0f, 100.0f) / 100.0f * .5f),
           logMin (std::log (20.0f)),
           invLogRange (1.0f / std::max (1.0e-6f, std::log (std::max (40.0f, (float) (hostRate * .5))) - logMin)) {}
 
-    std::array<float, 4> weightsForBin (int bin, int bins, double fftRate) const noexcept
+    // Keep slice identity until a caller explicitly folds slices into four racks.
+    SliceWeights sliceWeightsForBin (int bin, int bins, double fftRate) const noexcept
     {
-        if (bin <= 0 || bin >= bins - 1) return { 1, 0, 0, 0 };
+        if (bin <= 0 || bin >= bins - 1) return {};
         const float frequency = (float) bin * ((float) (fftRate * .5) / (float) (bins - 1));
         const float logPos = (std::log (std::max (20.0f, frequency)) - logMin) * invLogRange;
         const float pos = std::clamp (logPos * (float) slices, 0.0f, (float) (slices - 1) + .999f);
@@ -31,16 +38,26 @@ public:
             const float distance = std::min (frac, 1 - frac);
             if (distance < cfRange) weight = distance / cfRange;
         }
-        std::array<float, 4> weights {};
-        weights[(size_t) (slice % 4)] = weight;
+        SliceWeights result { slice, -1, weight, 0.0f };
         if (cfRange > 0 && weight < 1)
         {
-            if (frac < .5f && slice > 0) weights[(size_t) ((slice - 1) % 4)] += 1 - weight;
-            else if (frac >= .5f && slice < slices - 1) weights[(size_t) ((slice + 1) % 4)] += 1 - weight;
+            if (frac < .5f && slice > 0) result.second = slice - 1;
+            else if (frac >= .5f && slice < slices - 1) result.second = slice + 1;
+            if (result.second >= 0) result.secondWeight = 1 - weight;
         }
-        float sum = 0; for (auto w : weights) sum += w;
-        if (sum > 1.0e-6f) for (auto& w : weights) w /= sum;
-        else weights[0] = 1;
+        const float sum = result.firstWeight + result.secondWeight;
+        if (sum > 1.0e-6f) { result.firstWeight /= sum; result.secondWeight /= sum; }
+        else result = {};
+        return result;
+    }
+
+    std::array<float, 4> weightsForBin (int bin, int bins, double fftRate) const noexcept
+    {
+        const auto slicesForBin = sliceWeightsForBin (bin, bins, fftRate);
+        std::array<float, 4> weights {};
+        weights[(size_t) (slicesForBin.first % 4)] = slicesForBin.firstWeight;
+        if (slicesForBin.second >= 0)
+            weights[(size_t) (slicesForBin.second % 4)] += slicesForBin.secondWeight;
         return weights;
     }
 private:

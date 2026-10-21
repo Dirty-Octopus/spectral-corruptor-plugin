@@ -19,6 +19,62 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     updateNotice.setComponentID ("update-available");
     updateNotice.onClick = [this] { settingsPanel.showPage (2); settingsPanel.setVisible (true); settingsPanel.toFront (true); };
     inspector.addChildComponent (eqEditor);
+    inspector.addChildComponent (remapEditor);
+    inspector.addChildComponent (remapFormula);
+    inspector.addChildComponent (remapEditMode); inspector.addChildComponent (remapFormulaMode);
+    remapEditMode.setComponentID ("remap-mode-edit"); remapFormulaMode.setComponentID ("remap-mode-formula");
+    const auto selectRemapMode = [this] (int mode)
+    {
+        processor.setModuleParameter (channel, selectedUid, "remapMode", mode);
+        displayedChain = processor.getModuleChain (channel); rebuildInspector(); resized();
+        inspectorViewport.setViewPosition (0, 0);
+    };
+    remapEditMode.onClick = [selectRemapMode] { selectRemapMode (0); };
+    remapFormulaMode.onClick = [selectRemapMode] { selectRemapMode (1); };
+    remapFormula.onChange = [this] (const juce::Identifier& property, const juce::var& value)
+    {
+        if (remapFormula.isVisible() && remapFormula.getModuleUid() == selectedUid)
+            processor.setModuleParameter (channel, selectedUid, property, value);
+    };
+    remapFormula.mappingMenu = [this] (juce::Component& target, const juce::Identifier& parameter)
+    {
+        if (remapFormula.isVisible() && remapFormula.getModuleUid() == selectedUid)
+            macroMenu (target, channel, selectedUid, parameter);
+    };
+    remapFormula.onParametersChanged = [this] { wireFormulaSliders(); };
+    remapFormula.layoutChanged = [this] { resized(); };
+    remapFormula.effectiveValue = [this] (const juce::Identifier& parameter, double base)
+    { return processor.getEffectiveValue (channel, remapFormula.getModuleUid(), parameter, base); };
+    inspector.addChildComponent (remapReset); inspector.addChildComponent (remapReverse);
+    remapEditor.setComponentID ("frequency-remap-curve");
+    remapEditor.setConstraints (false, false);
+    remapEditor.onChange = [this] (const scrr::params::TransferCurve& curve)
+    {
+        if (remapEditor.isVisible()) processor.setModuleParameter (channel, selectedUid, "remapCurve", curve.encode());
+    };
+    remapEditor.nodeMenu = [this] (juce::Component& target, uint32_t point)
+    {
+        const auto safe = juce::Component::SafePointer<EditorContent> (this);
+        const auto targetUid = selectedUid; const int targetChannel = channel;
+        showCurveCoordinateMenu (target, remapEditor.canMapCoordinate (point, true), remapEditor.canMapCoordinate (point, false),
+            "Input frequency", "Output frequency", [safe, targetUid, targetChannel, point] (bool xAxis)
+            {
+                if (! safe || safe->selectedUid != targetUid || safe->channel != targetChannel
+                    || ! safe->remapEditor.canMapCoordinate (point, xAxis)) return;
+                safe->macroMenu (safe->remapEditor, targetChannel, targetUid, scrr::params::curveCoordinateParameter (point, xAxis));
+            });
+    };
+    remapReset.onClick = [this]
+    {
+        auto curve = remapEditor.getCurve(); curve.reset(); remapEditor.setCurve (curve);
+        processor.setModuleParameter (channel, selectedUid, "remapCurve", curve.encode());
+    };
+    remapReverse.onClick = [this]
+    {
+        auto curve = remapEditor.getCurve(); curve.reset();
+        curve.points.front().y = 1; curve.points.back().y = 0; remapEditor.setCurve (curve);
+        processor.setModuleParameter (channel, selectedUid, "remapCurve", curve.encode());
+    };
     eqEditor.onParameterChange = [this] (const juce::String& key, const juce::var& value)
     {
         if (! eqEditor.isVisible() || eqEditor.getModuleUid() != selectedUid) return;
@@ -28,6 +84,11 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
         for (auto& control : controls) if (control->getComponentID() == key) control->setValueFromState (value);
     };
     eqEditor.onBandSelected = [this] (int) { const auto safe = juce::Component::SafePointer<EditorContent> (this); juce::MessageManager::callAsync ([safe] { if (safe) { safe->displayedChain = safe->processor.getModuleChain (safe->channel); safe->rebuildInspector(); safe->resized(); } }); };
+    eqEditor.mappingMenu = [this] (juce::Component& target, const juce::String& parameter)
+    {
+        if (eqEditor.isVisible() && eqEditor.getModuleUid() == selectedUid)
+            macroMenu (target, channel, selectedUid, juce::Identifier (parameter));
+    };
     shownThemeRevision = ThemeProfiles::get().revision();
     addAndMakeVisible (presets); addAndMakeVisible (inputSpectrum); addAndMakeVisible (outputSpectrum);
     undoButton.setTooltip ("Undo (Cmd/Ctrl+Z)"); redoButton.setTooltip ("Redo (Cmd/Ctrl+Shift+Z)");
@@ -48,6 +109,8 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     addAndMakeVisible (settingsButton); addChildComponent (settingsPanel);
     addAndMakeVisible (macroBar); addChildComponent (macroPanel);
     macroBar.openMappings = [this] (int index) { settingsPanel.setVisible (false); cancelDrag(); browser.setVisible (false); licensePanel.setVisible (false); macroPanel.showMacro (index); };
+    macroPanel.mappingMenu = [this] (juce::Component& target, const juce::String& routeUid, const juce::Identifier& parameter)
+    { macroMenu (target, scrr::params::MacroMapping::responseChannel, routeUid, parameter); };
     setupSlider (dryWet, 0, 100, .1, 100); dryWet.setTextValueSuffix (" %");
     setupSlider (inputGain, -48, 12, .1, 0); inputGain.setTextValueSuffix (" dB");
     setupSlider (outputGain, -48, 12, .1, 0); outputGain.setTextValueSuffix (" dB");
@@ -60,7 +123,13 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     }
     inputGain.setComponentID ("input-gain"); outputGain.setComponentID ("output-gain");
     setupSlider (splitCount, 1, 64, 1, 1); setupSlider (crossfade, 0, 100, .1, 0); crossfade.setTextValueSuffix (" %");
-    for (auto* s : { &dryWet, &inputGain, &outputGain, &splitCount, &crossfade })
+    setupSlider (overlapFactor, 2, 16, .01, 4); overlapFactor.setTextValueSuffix (" x");
+    overlapFactor.setComponentID ("fft-overlap");
+    overlapFactor.setTooltip ("Requested FFT overlap, from 2x to 16x. The integer hop size determines the actual factor shown below. Higher overlap processes more frames.");
+    overlapActual.setComponentID ("fft-overlap-actual"); overlapActual.setFont (Theme::font (9, true));
+    overlapActual.setColour (juce::Label::textColourId, Theme::black()); overlapActual.setJustificationType (juce::Justification::centredLeft);
+    masterContent.addAndMakeVisible (overlapActual);
+    for (auto* s : { &dryWet, &inputGain, &outputGain, &splitCount, &crossfade, &overlapFactor })
     {
         s->setColour (juce::Slider::trackColourId, Theme::black());
         s->setColour (juce::Slider::thumbColourId, Theme::black());
@@ -68,7 +137,7 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
         masterContent.addAndMakeVisible (s);
     }
     fftSize.addItemList (scrr::params::choice::fftSizeExtended, 1); oversample.addItemList (scrr::params::choice::oversample, 1);
-    window.addItemList (scrr::params::choice::windowType, 1);
+    window.addItemList (scrr::params::choice::windowTypeExtended, 1);
     for (auto* c : { &fftSize, &oversample, &window }) masterContent.addAndMakeVisible (c);
     masterViewport.setViewedComponent (&masterContent, false); masterViewport.setScrollBarsShown (true, false); addAndMakeVisible (masterViewport);
     for (auto* b : { &bypass, &solo, &post }) addAndMakeVisible (b);
@@ -79,6 +148,7 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
     using namespace scrr::params;
     attachSlider (id::drywet, dryWet); attachSlider (id::inputGain, inputGain); attachSlider (id::outputGain, outputGain);
     attachSlider (id::freqSplitNumSplits, splitCount); attachSlider (id::freqSplitCrossfade, crossfade);
+    attachSlider ("global.overlapFactor", overlapFactor);
     const std::pair<AssignableSlider*, juce::String> globalTargets[] {
         { &dryWet, id::drywet }, { &inputGain, id::inputGain }, { &outputGain, id::outputGain },
         { &splitCount, id::freqSplitNumSplits }, { &crossfade, id::freqSplitCrossfade } };
@@ -89,7 +159,8 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
         target.first->unmapRoute = [this, target] (auto mapping) { processor.removeMacroMapping (0, {}, juce::Identifier (target.second), mapping.macro, mapping.sourceUid); };
     }
     attachButton (id::bypass, bypass); attachButton (id::freqSplitSolo, solo); attachButton (id::freqSplitPostPreview, post);
-    attachCombo (id::fftSizeExtended, fftSize); attachCombo (id::oversample, oversample); attachCombo (id::windowType, window);
+    attachCombo (id::fftSizeExtended, fftSize); attachCombo (id::oversample, oversample); attachCombo (id::windowTypeExtended, window);
+    window.setComponentID ("fft-window");
     fftSize.setComponentID ("fft-size");
     fftSize.setTooltip ("128-32768 samples. Legacy automation uses the original FFT Size host parameter (1024-8192). Larger sizes add latency.");
     oversample.setTooltip ("Actual oversampling multiplier. FFT size scales with it to preserve resolution.");
@@ -130,6 +201,11 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
         juce::MessageManager::callAsync ([safe] { if (safe) safe->rebuildRack(); });
     };
     addAndMakeVisible (enabled);
+    processingStatus.setComponentID ("effect-processing-status"); processingStatus.setFont (Theme::font (11, true));
+    processingStatus.setJustificationType (juce::Justification::centredLeft);
+    processingStatus.setColour (juce::Label::backgroundColourId, Theme::black());
+    processingStatus.setColour (juce::Label::textColourId, Theme::yellow());
+    addChildComponent (processingStatus);
     notesPanel.changed = [this] (const juce::String& text) { processor.setModuleParameter (channel, selectedUid, "notes", text); };
     addChildComponent (notesPanel);
     orderNotice.setComponentID ("chain-order-notice");
@@ -147,7 +223,7 @@ EditorContent::EditorContent (SpectralCrrptProcessor& p)
         Theme::text (g, text, { control.getX(), control.getY() - 19, control.getWidth(), 17 }, 11, Theme::black(), true);
     };
     label ("DRY / WET", dryWet, scrr::params::id::drywet); label ("INPUT", inputGain, scrr::params::id::inputGain); label ("OUTPUT", outputGain, scrr::params::id::outputGain);
-    label ("FFT SIZE", fftSize); label ("OVERSAMPLE", oversample); label ("FREQUENCY SLICES", splitCount, scrr::params::id::freqSplitNumSplits); label ("BAND CROSSFADE", crossfade, scrr::params::id::freqSplitCrossfade);
+    label ("FFT SIZE", fftSize); label ("OVERSAMPLE", oversample); label ("OVERLAP FACTOR", overlapFactor); label ("FREQUENCY SLICES", splitCount, scrr::params::id::freqSplitNumSplits); label ("BAND CROSSFADE", crossfade, scrr::params::id::freqSplitCrossfade);
     };
     modulationButton.setComponentID ("modulation-tab");
     modulationButton.setColour (juce::TextButton::buttonColourId, Theme::blue());
@@ -235,7 +311,8 @@ void EditorContent::timerCallback()
         && (! modulationPage.isVisible() || modulationPage.getAlpha() < .1f);
     if (artworkVisible)
     {
-        if (enabled.getToggleState()) ambient += dt;
+        const bool partial = scrr::dsp::isPartialEffect (displayedChain.getChildWithProperty ("uid", selectedUid)["type"].toString());
+        if (enabled.getToggleState() && ! shownResourceLimited && (! partial || (shownEffectiveSplits > 1 && ! shownPartialSoloBypass))) ambient += dt;
         updateCardParameters(); card.animate (ambient, arrival);
     }
     if (pageProgress >= 1) departingPage = {};
@@ -256,6 +333,51 @@ void EditorContent::timerCallback()
     processor.readHostBeat (displayedBeat);
     const float beatPhase = indicatorClock.tick (elapsed, displayedBeat);
     const int activeSlices = (int) processor.getEffectiveValue (0, {}, scrr::params::id::freqSplitNumSplits, splitCount.getValue());
+    const bool soloBypass = solo.getToggleState() && ! post.getToggleState();
+    const auto resource = processor.getProcessor().getModuleResourceStatus (channel, selectedUid);
+    if (shownEffectiveSplits != activeSlices || shownPartialSoloBypass != soloBypass || shownResourceLimited != resource.blocked
+        || shownResourceRequired != resource.requiredBytes || shownResourceAvailable != resource.availableBytes || shownResourceBudget != resource.budgetBytes)
+    {
+        shownEffectiveSplits = activeSlices; shownPartialSoloBypass = soloBypass;
+        shownResourceLimited = resource.blocked; shownResourceRequired = resource.requiredBytes;
+        shownResourceAvailable = resource.availableBytes; shownResourceBudget = resource.budgetBytes;
+        updateProcessingStatus();
+    }
+    for (auto& row : rows)
+    {
+        row->setPartialStatus (activeSlices > 1, soloBypass);
+        row->setResourceLimited (processor.getProcessor().getModuleResourceStatus (channel, row->uid).blocked);
+    }
+    const int actualFFT = processor.getProcessor().getFFTSize(), actualHop = processor.getProcessor().getHopSize();
+    if (actualFFT != shownActualFFT || actualHop != shownActualHop)
+    {
+        shownActualFFT = actualFFT; shownActualHop = actualHop;
+        overlapActual.setText (actualHop > 0 && actualFFT > 0 ? "ACTUAL " + juce::String ((double) actualFFT / actualHop, 3)
+            + "x / " + juce::String ((1.0 - (double) actualHop / actualFFT) * 100.0, 2) + "% / H" + juce::String (actualHop)
+            : "ACTUAL / NOT PREPARED", juce::dontSendNotification);
+    }
+    if (remapEditor.isVisible() || remapFormula.isVisible()) updateRemapAxes();
+    if (remapEditor.isVisible() && ! remapEditor.isEditing())
+    {
+        const auto current = processor.getModuleChain (channel).getChildWithProperty ("uid", selectedUid);
+        if (current.isValid())
+        {
+            auto effective = scrr::params::TransferCurve::decode (current["remapCurve"].toString());
+            remapEditor.setCurve (effective);
+            for (auto& point : effective.points)
+            {
+                point.x = (float) processor.getEffectiveValue (channel, selectedUid, scrr::params::curveCoordinateParameter (point.id, true), point.x);
+                point.y = (float) processor.getEffectiveValue (channel, selectedUid, scrr::params::curveCoordinateParameter (point.id, false), point.y);
+            }
+            remapEditor.setPreviewCurve (effective);
+        }
+    }
+    if (remapFormula.isVisible())
+    {
+        const auto current = processor.getModuleChain (channel).getChildWithProperty ("uid", selectedUid);
+        if (current.isValid() && ! remapFormula.isEditing()) remapFormula.setState (current);
+        remapFormula.refreshPreview();
+    }
     for (int i = 0; i < 4; ++i)
     {
         tabs[i].setActivity (processor.getAPVTS().getRawParameterValue (scrr::params::id::channelEnabled[(size_t) i])->load() > .5f,
@@ -284,7 +406,8 @@ void EditorContent::timerCallback()
                     dragModulationOutput (draggingSource, localPointToGlobal (dragPoint), false);
                 }
             }
-    macroBar.refreshNames(); macroBar.repaint(); macroPanel.repaint(); browser.repaint(); modulationPage.tick(); modulationButton.repaint(); settingsButton.repaint();
+    macroBar.refreshNames(); macroBar.repaint(); macroPanel.tick(); browser.repaint(); modulationPage.tick(); modulationButton.repaint(); settingsButton.repaint();
+    updatePartialControls();
     refreshMacroControls();
     if (eqEditor.isVisible())
     {
@@ -301,6 +424,11 @@ void EditorContent::timerCallback()
     }
     updateChannelColours();
     updateLicenseStatus();
+    const auto legacyWindow = scrr::params::choice::windowType[juce::jlimit (0, 3,
+        (int) processor.getAPVTS().getRawParameterValue (scrr::params::id::windowType)->load())] + " / L";
+    const bool legacyWindowSelected = window.getSelectedId() == 1;
+    window.changeItemText (1, legacyWindow);
+    if (legacyWindowSelected && window.getText() != legacyWindow) window.setSelectedId (1, juce::dontSendNotification);
     const auto legacySize = juce::String (1024 << (int) processor.getAPVTS().getRawParameterValue (scrr::params::id::fftSize)->load()) + " / L";
     const bool legacySelected = fftSize.getSelectedId() == 1;
     fftSize.changeItemText (1, legacySize);
@@ -331,7 +459,7 @@ void EditorContent::updateCardParameters()
     if (selected < 0) return;
     const auto type = displayedChain.getChild (selected)["type"].toString();
     if (type != "Reverb" && type != "Delay" && type != "Compressor" && type != "Distortion"
-        && type != "SpectralClipper" && type != "SpectralEqualizer") return;
+        && type != "SpectralClipper" && type != "SpectralEqualizer" && type != "FrequencyRemap") return;
     const auto chain = processor.getModuleChain (channel);
     for (auto child : chain)
         if (child["uid"].toString() == selectedUid)
@@ -376,6 +504,13 @@ void EditorContent::refreshMacroControls()
     };
     for (auto* group : { &common, &controls }) for (auto& control : *group)
         if (auto* slider = control->getAssignableSlider()) refresh (*slider, channel, selectedUid, juce::Identifier (control->getComponentID()));
+    if (remapFormula.isVisible())
+    {
+        const int oldHeight = remapFormula.getPreferredHeight();
+        for (auto* slider : remapFormula.getParameterSliders())
+            refresh (*slider, channel, selectedUid, juce::Identifier (slider->getComponentID()));
+        if (oldHeight != remapFormula.getPreferredHeight()) { remapFormula.resized(); resized(); }
+    }
     using namespace scrr::params;
     const std::pair<AssignableSlider*, juce::String> globals[] {
         { &dryWet, id::drywet }, { &inputGain, id::inputGain }, { &outputGain, id::outputGain },
@@ -397,13 +532,15 @@ void EditorContent::macroMenu (juce::Component& target, int targetChannel, const
     for (const auto& m : displayedMappings) if (m.sourceUid.isEmpty() && m.channel == targetChannel && m.uid == uid && m.parameter == parameter) { assigned = m.macro; assignedMacros[(size_t) m.macro] = true; }
     juce::PopupMenu menu; menu.setLookAndFeel (&look); menu.addSectionHeader ("SEND TO MACRO");
     for (int i = 0; i < 8; ++i) menu.addItem (i + 1, processor.getMacroLabel (i), true, assignedMacros[(size_t) i]);
-    const auto sources = targetChannel == scrr::params::MacroMapping::modulationChannel ? std::vector<scrr::params::ModulationSource> {} : processor.getModulators();
+    const auto sources = targetChannel == scrr::params::MacroMapping::modulationChannel && ! scrr::params::isCurveCoordinateParameter (parameter)
+        ? std::vector<scrr::params::ModulationSource> {} : processor.getModulators();
     std::vector<bool> sourceAssigned (sources.size(), false);
     juce::PopupMenu lfos, envelopes, randoms;
     for (size_t i = 0; i < sources.size(); ++i)
     {
         for (const auto& m : displayedMappings) if (m.sourceUid == sources[i].uid && m.channel == targetChannel && m.uid == uid && m.parameter == parameter) sourceAssigned[i] = true;
-        (sources[i].envelope ? envelopes : sources[i].random ? randoms : lfos).addItem (100 + (int) i, sources[i].name, true, sourceAssigned[i]);
+        const bool allowed = sourceAssigned[i] || processor.canAssignModulator (sources[i].uid, targetChannel, uid, parameter);
+        (sources[i].envelope ? envelopes : sources[i].random ? randoms : lfos).addItem (100 + (int) i, sources[i].name, allowed, sourceAssigned[i]);
     }
     if (lfos.getNumItems() > 0) menu.addSubMenu ("SEND TO LFO", lfos);
     if (envelopes.getNumItems() > 0) menu.addSubMenu ("SEND TO AUDIO FOLLOWER", envelopes);
@@ -436,9 +573,11 @@ void EditorContent::refreshTheme()
     refreshEditorColours (*this);
     add.setColour (juce::TextButton::buttonColourId, Theme::blue());
     modulationButton.setColour (juce::TextButton::buttonColourId, Theme::blue());
-    for (auto* s : { &dryWet, &inputGain, &outputGain, &splitCount, &crossfade })
+    for (auto* s : { &dryWet, &inputGain, &outputGain, &splitCount, &crossfade, &overlapFactor })
     { s->setColour (juce::Slider::trackColourId, Theme::black()); s->setColour (juce::Slider::thumbColourId, Theme::black()); s->setColour (juce::Slider::backgroundColourId, Theme::black().withAlpha (.25f)); }
     for (auto* gain : { &inputGain, &outputGain }) gain->setColour (juce::Slider::rotarySliderFillColourId, Theme::black());
+    overlapActual.setColour (juce::Label::textColourId, Theme::black());
+    processingStatus.setColour (juce::Label::backgroundColourId, Theme::black()); processingStatus.setColour (juce::Label::textColourId, Theme::yellow());
     orderNotice.setColour (juce::Label::backgroundColourId, Theme::black()); orderNotice.setColour (juce::Label::textColourId, Theme::yellow());
     orderNotice.setColour (juce::Label::outlineColourId, Theme::yellow());
     licenseButton.setColour (juce::TextButton::buttonColourId, processor.getLicense().isActivated() ? Theme::panel() : Theme::red());
@@ -518,11 +657,17 @@ void EditorContent::dragModulationOutput (const juce::String& uid, juce::Point<i
     if (sourceDropTarget) sourceDropTarget->setModulationDropHighlight (false);
     sourceDropTarget = nullptr;
     if (channelRevealed && inspectorViewport.isVisible() && inspectorViewport.getBounds().contains (dragPoint))
+    {
         for (auto* group : { &common, &controls }) for (auto& control : *group)
             if (control->isVisible() && control->isEnabled())
                 if (auto* slider = control->getAssignableSlider())
                     if (slider->isVisible() && slider->canReceiveModulationSource()
                         && getLocalArea (slider, slider->getLocalBounds()).contains (dragPoint)) sourceDropTarget = slider;
+        if (remapFormula.isVisible())
+            for (auto* slider : remapFormula.getParameterSliders())
+                if (slider->isShowing() && slider->canReceiveModulationSource()
+                    && getLocalArea (slider, slider->getLocalBounds()).contains (dragPoint)) sourceDropTarget = slider;
+    }
     if (sourceDropTarget) sourceDropTarget->setModulationDropHighlight (true);
     if (finish)
     {
@@ -550,6 +695,8 @@ void EditorContent::selectChannel (int nextChannel)
 }
 void EditorContent::rebuildRack()
 {
+    shownEffectiveSplits = (int) processor.getEffectiveValue (0, {}, scrr::params::id::freqSplitNumSplits, splitCount.getValue());
+    shownPartialSoloBypass = solo.getToggleState() && ! post.getToggleState();
     displayedMappings = processor.getMacroMappings(); macroBar.refresh();
     if (macroPanel.isVisible()) macroPanel.refresh();
     // Save only GUI pixels for an interrupted transition. No processor/tree is
@@ -593,6 +740,9 @@ void EditorContent::rebuildRack()
         const auto uid = child["uid"].toString();
         auto row = std::make_unique<ModuleRow> (spec->displayName, uid, i, (bool) child["enabled"], selected == i);
         row->generic = scrr::dsp::isGenericEffect (spec->typeId); row->notes = spec->typeId == "Notes";
+        row->partial = scrr::dsp::isPartialEffect (spec->typeId);
+        row->setPartialStatus (shownEffectiveSplits > 1, shownPartialSoloBypass);
+        row->setResourceLimited (processor.getProcessor().getModuleResourceStatus (channel, uid).blocked);
         row->contextMenu = [safe, uid] (const juce::MouseEvent& event)
         { if (safe) safe->chainContextMenu (uid, event.getEventRelativeTo (safe.getComponent()).getPosition()); };
         row->choose = [safe, uid]
@@ -631,11 +781,16 @@ void EditorContent::rebuildInspector()
     shownFrequencyLimit = processor.getFrequencyLimit();
     controls.clear(); common.clear(); selectedName.clear(); selectedDescription.clear();
     const bool valid = selected >= 0;
+    remapEditor.setVisible (false); remapReset.setVisible (false); remapReverse.setVisible (false); processingStatus.setVisible (false);
+    remapFormula.setVisible (false); remapEditMode.setVisible (false); remapFormulaMode.setVisible (false);
     notesPanel.setVisible (false); eqEditor.setVisible (false); shownEqBand = -1; inspectorViewport.setVisible (true);
     card.setVisible (valid);
     enabled.setVisible (valid);
     if (! valid) { updateRange(); return; }
     auto child = displayedChain.getChild (selected); auto type = child["type"].toString();
+    const auto resource = processor.getProcessor().getModuleResourceStatus (channel, selectedUid);
+    shownResourceLimited = resource.blocked; shownResourceRequired = resource.requiredBytes;
+    shownResourceAvailable = resource.availableBytes; shownResourceBudget = resource.budgetBytes;
     auto* spec = scrr::dsp::findModuleSpec (type); if (! spec) return;
     selectedName = spec->displayName; selectedDescription = moduleDescription (type);
     if (type == "Notes")
@@ -644,7 +799,8 @@ void EditorContent::rebuildInspector()
         notesPanel.setDocument (selectedUid, child["notes"].toString()); notesPanel.setVisible (true); updateRange(); return;
     }
     enabled.setToggleState ((bool) child["enabled"], juce::dontSendNotification);
-    const bool effectActive = (bool) child["enabled"];
+    const bool effectActive = (bool) child["enabled"] && ! shownResourceLimited && (! scrr::dsp::isPartialEffect (type)
+        || (shownEffectiveSplits > 1 && ! shownPartialSoloBypass));
     card.setEffect (type, selectedName, selected + 1, effectActive);
     updateCardParameters();
     card.setTooltip (selectedDescription);
@@ -654,13 +810,16 @@ void EditorContent::rebuildInspector()
     {
         const auto id = param.id;
         auto control = std::make_unique<ParameterControl> (param, child.getProperty (id, param.defaultVal),
-            [safe, uid, targetChannel, id] (const juce::var& value)
+            [safe, uid, targetChannel, id, partial = scrr::dsp::isPartialEffect (type)] (const juce::var& value)
             {
                 if (! safe) return;
                 safe->processor.setModuleParameter (targetChannel, uid, juce::Identifier (id), value);
                 if (id == "track")
                     for (auto& c : safe->controls)
                         if (c->getComponentID() == "fundamental") { c->setEnabled (! (bool) value); c->setAlpha ((bool) value ? .4f : 1.0f); }
+                if (partial && id == "mode")
+                    for (auto& c : safe->controls)
+                        if (c->getComponentID() == "shape") { c->setEnabled ((int) value == 1); c->setAlpha ((int) value == 1 ? 1.0f : .4f); }
                 if (id == "sync")
                     for (auto& c : safe->controls)
                         if (c->getComponentID() == "time" || c->getComponentID() == "division")
@@ -691,11 +850,22 @@ void EditorContent::rebuildInspector()
         inspector.addAndMakeVisible (*control);
         (shared ? common : controls).push_back (std::move (control));
     };
-    if (! scrr::dsp::isGenericEffect (type))
+    if (! scrr::dsp::isGenericEffect (type) && ! scrr::dsp::isPartialEffect (type))
     {
-        makeControl (scrr::dsp::makeFloat ("rangeLow", "LOW / Hz", 0, shownFrequencyLimit, 0, 1, " Hz"), true);
-        makeControl (scrr::dsp::makeFloat ("rangeHigh", "HIGH / Hz", 0, shownFrequencyLimit, shownFrequencyLimit, 1, " Hz"), true);
+        makeControl (scrr::dsp::makeFloat ("rangeLow", type == "FrequencyRemap" ? "SOURCE LOW / Hz" : "LOW / Hz", 0, shownFrequencyLimit, 0, 1, " Hz"), true);
+        makeControl (scrr::dsp::makeFloat ("rangeHigh", type == "FrequencyRemap" ? "SOURCE HIGH / Hz" : "HIGH / Hz", 0, shownFrequencyLimit, shownFrequencyLimit, 1, " Hz"), true);
         makeControl (scrr::dsp::makeFloat ("moduleMix", "STAGE MIX", 0, 100, 100, .1f, " %"), true);
+    }
+    if (type == "FrequencyRemap")
+    {
+        const bool formula = (int) child.getProperty ("remapMode", 0) == 1;
+        remapEditMode.setVisible (true); remapFormulaMode.setVisible (true);
+        remapEditMode.setToggleState (! formula, juce::dontSendNotification);
+        remapFormulaMode.setToggleState (formula, juce::dontSendNotification);
+        remapEditor.setCurve (scrr::params::TransferCurve::decode (child["remapCurve"].toString()));
+        remapFormula.setState (child); remapFormula.setVisible (formula); wireFormulaSliders();
+        shownRemapLimit = 0; updateRemapAxes();
+        remapEditor.setVisible (! formula); remapReset.setVisible (! formula); remapReverse.setVisible (! formula);
     }
     if (type == "SpectralEqualizer")
     {
@@ -706,6 +876,7 @@ void EditorContent::rebuildInspector()
         for (const auto& param : spec->params) if (param.id.startsWith (prefix)) makeControl (param, false);
     }
     else for (const auto& param : spec->params) makeControl (param, false);
+    if (scrr::dsp::isPartialEffect (type)) updatePartialControls();
     if (type == "Delay")
         for (auto& c : controls)
             if (c->getComponentID() == "time" || c->getComponentID() == "division")
@@ -717,16 +888,110 @@ void EditorContent::rebuildInspector()
     if ((bool) child.getProperty ("track", false))
         for (auto& c : controls)
             if (c->getComponentID() == "fundamental") { c->setEnabled (false); c->setAlpha (.4f); }
+    updateProcessingStatus(); updateRange();
+}
+void EditorContent::updateRemapAxes()
+{
+    const double limit = juce::jmax (20.0, juce::jmin ((double) processor.getFrequencyLimit(),
+        processor.getProcessor().getSampleRate() * .5 * processor.getProcessor().getOversampleFactor()));
+    if (std::abs (shownRemapLimit - limit) < .001) return;
+    shownRemapLimit = limit;
+    remapFormula.setFrequencyLimit (limit);
+    remapEditor.setAxisLabels ("INPUT Hz / LOG", "OUTPUT Hz / LOG");
+    remapEditor.setEndpointLabels ("20 Hz", juce::String (limit, 0) + " Hz");
+    remapEditor.setCoordinateFormatter ([limit] (float input, float output)
+    {
+        const auto hz = [limit] (float position) { return 20.0 * std::pow (limit / 20.0, position); };
+        return juce::String (hz (input), 1) + " Hz > " + juce::String (hz (output), 1) + " Hz";
+    });
+}
+void EditorContent::wireFormulaSliders()
+{
+    const auto safe = juce::Component::SafePointer<EditorContent> (this);
+    const int targetChannel = channel; const auto uid = remapFormula.getModuleUid();
+    for (auto* slider : remapFormula.getParameterSliders())
+    {
+        const auto parameter = juce::Identifier (slider->getComponentID());
+        const auto sliderSafe = juce::Component::SafePointer<AssignableSlider> (slider);
+        slider->mappingMenu = [safe, sliderSafe, targetChannel, uid, parameter]
+        { if (safe && sliderSafe) safe->macroMenu (*sliderSafe, targetChannel, uid, parameter); };
+        slider->changeMapping = [safe] (auto mapping) { if (safe) safe->processor.updateMacroMapping (mapping); };
+        slider->unmapRoute = [safe, targetChannel, uid, parameter] (auto mapping)
+        { if (safe) safe->processor.removeMacroMapping (targetChannel, uid, parameter, mapping.macro, mapping.sourceUid); };
+        slider->receiveModulationSource = [safe, targetChannel, uid, parameter] (const juce::String& source)
+        { if (safe) safe->processor.assignModulator (source, targetChannel, uid, parameter); };
+    }
+}
+void EditorContent::updatePartialControls()
+{
+    const auto displayed = displayedChain.getChildWithProperty ("uid", selectedUid);
+    if (! scrr::dsp::isPartialEffect (displayed["type"].toString())) return;
+    const auto current = processor.getModuleChain (channel).getChildWithProperty ("uid", selectedUid);
+    if (! current.isValid() || current["type"] != displayed["type"]) return;
+
+    // Parameter-only edits do not rebuild the rack. Follow their detached state
+    // while preserving live sliders, text entry and open choice menus.
+    const auto* focusedText = dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent());
+    const auto editing = [focusedText] (const ParameterControl& control)
+    {
+        if (control.isMouseButtonDown (true) || (focusedText != nullptr && control.isParentOf (focusedText))) return true;
+        for (const auto* child : control.getChildren())
+            if (const auto* combo = dynamic_cast<const juce::ComboBox*> (child); combo != nullptr && combo->isPopupActive()) return true;
+        return false;
+    };
+    bool editingModeOrShape = false;
+    for (const auto& control : controls)
+        if (control->getComponentID() == "mode" || control->getComponentID() == "shape")
+            editingModeOrShape = editingModeOrShape || editing (*control);
+
+    for (auto& control : controls)
+    {
+        const auto key = control->getComponentID();
+        if (editing (*control) || (editingModeOrShape && (key == "mode" || key == "shape"))) continue;
+        if (current.hasProperty (key)) control->setValueFromState (current.getProperty (key));
+        if (key == "shape")
+        {
+            const bool resynth = (int) current.getProperty ("mode", 0) == 1;
+            control->setEnabled (resynth); control->setAlpha (resynth ? 1.0f : .4f);
+        }
+    }
+}
+void EditorContent::updateProcessingStatus()
+{
+    const auto child = displayedChain.getChildWithProperty ("uid", selectedUid);
+    const auto type = child["type"].toString();
+    const bool partial = scrr::dsp::isPartialEffect (type);
+    const bool wasVisible = processingStatus.isVisible();
+    processingStatus.setVisible (partial || shownResourceLimited);
+    if (! child.isValid() || type == "Notes") return;
+    const bool available = shownEffectiveSplits > 1;
+    const bool active = ! shownResourceLimited && (! partial || (available && ! shownPartialSoloBypass)) && (bool) child.getProperty ("enabled", true);
+    const auto mebibytes = [] (size_t bytes) { return juce::String ((double) bytes / (1024.0 * 1024.0), 1) + " MiB"; };
+    processingStatus.setText (shownResourceLimited ? "BYPASSED / " + selectedName.toUpperCase() + "\nNEEDS " + mebibytes (shownResourceRequired)
+            + " / AVAILABLE " + mebibytes (shownResourceAvailable) + " / BUDGET " + mebibytes (shownResourceBudget)
+        : ! available ? "BYPASSED / SET FREQUENCY SLICES TO 2 OR MORE"
+        : shownPartialSoloBypass ? "BYPASSED / ENABLE POST SPLIT FOR PARTIALS IN SOLO"
+        : "PARTIAL PROCESSING / " + juce::String (shownEffectiveSplits) + " SLICES / " + (active ? "ACTIVE" : "STAGE OFF"), juce::dontSendNotification);
+    processingStatus.setTooltip (shownResourceLimited ? "Only this effect is bypassed because its required processing buffers exceed the available memory budget. Its settings remain editable. Reduce its memory demand or disable other memory-heavy effects to restore it."
+        : ! available ? "This effect needs frequency splitting. Its settings remain editable while processing is bypassed."
+        : shownPartialSoloBypass ? "Solo before splitting auditions the whole chain without partial processing. Enable Post Split to audition its assigned partials. Settings remain editable."
+        : selectedDescription);
+    card.setEffect (type, selectedName, selected + 1, active);
+    for (auto* group : { &common, &controls }) for (auto& control : *group) control->setAccent (active ? Theme::yellow() : Theme::inactive());
+    eqEditor.setAccent (active ? Theme::yellow() : Theme::inactive());
+    if (wasVisible != processingStatus.isVisible()
+        || (processingStatus.isVisible() && processingStatus.getHeight() != (shownResourceLimited ? 44 : 30))) resized();
     updateRange();
+    repaint();
 }
 void EditorContent::updateRange()
 {
     auto child = displayedChain.getChild (selected);
-    if (child["type"].toString() == "Notes")
+    if (child["type"].toString() == "Notes" || scrr::dsp::isPartialEffect (child["type"].toString()))
     { inputSpectrum.setRange (0, shownFrequencyLimit, false); outputSpectrum.setRange (0, shownFrequencyLimit, false); return; }
     const float low = (float) processor.getEffectiveValue (channel, selectedUid, "rangeLow", (double) child.getProperty ("rangeLow", 0.0));
     const float high = (float) processor.getEffectiveValue (channel, selectedUid, "rangeHigh", (double) child.getProperty ("rangeHigh", 96000.0));
-    const bool active = (bool) child.getProperty ("enabled", true);
+    const bool active = ! shownResourceLimited && (bool) child.getProperty ("enabled", true);
     inputSpectrum.setRange (low, high, active); outputSpectrum.setRange (low, high, active);
 }
 void EditorContent::addMenu() { cancelDrag(); browser.open(); }
@@ -913,16 +1178,17 @@ void EditorContent::resized()
     int y = 0;
     for (auto& row : rows) { row->setBounds (0, y, rowWidth, 56); y += 56; }
     rack.setSize (rowWidth, juce::jmax (y, chain.getHeight()));
-    auto detail = detailArea.reduced (14, 0); moduleHeader = detail.removeFromTop (eqEditor.isVisible() ? 72 : 140);
+    auto detail = detailArea.reduced (14, 0); moduleHeader = detail.removeFromTop ((eqEditor.isVisible() || remapEditMode.isVisible() || processingStatus.isVisible()) ? 72 : 140);
     card.setBounds (moduleHeader); notesPanel.setBounds (detailArea.reduced (14, 10)); detail.removeFromTop (7);
     auto actions = detail.removeFromTop (25); enabled.setBounds (actions.removeFromLeft (115)); detail.removeFromTop (9);
+    if (processingStatus.isVisible()) { processingStatus.setBounds (detail.removeFromTop (shownResourceLimited ? 44 : 30)); detail.removeFromTop (8); }
     browser.setBounds (detailArea);
     orderNotice.setBounds (detailArea.reduced (14, 0).withTrimmedTop (10).withHeight (48));
     modulationPage.setBounds (rackArea.getUnion (detailArea));
     settingsPanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (600, getWidth() - 48), 620));
     quickGuide.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (740, getWidth() - 48), juce::jmin (640, getHeight() - 48)));
     licensePanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (620, getWidth() - 48), 452));
-    macroPanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (900, getWidth() - 48), 470));
+    macroPanel.setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (900, getWidth() - 48), juce::jmin (700, getHeight() - 48)));
     inspectorViewport.setBounds (detail); emptyArea = detailArea;
     const int width = juce::jmax (180, detail.getWidth() - 12);
     const int commonWidth = width / 3;
@@ -933,6 +1199,21 @@ void EditorContent::resized()
     {
         const int graphHeight = juce::jlimit (150, SpectralEqEditor::preferredHeight(), detail.getHeight() - 12);
         eqEditor.setBounds (0, 0, width, graphHeight); controlY = graphHeight + 10;
+    }
+    if (remapEditMode.isVisible())
+    {
+        remapEditMode.setBounds (0, 0, 100, 26); remapFormulaMode.setBounds (106, 0, 118, 26);
+        if (remapEditor.isVisible())
+        {
+            remapEditor.setBounds (0, 34, width, 190);
+            remapReset.setBounds (0, 230, 112, 24); remapReverse.setBounds (120, 230, 124, 24);
+            controlY = 264;
+        }
+        else
+        {
+            const int height = remapFormula.getPreferredHeight();
+            remapFormula.setBounds (0, 34, width, height); controlY = height + 44;
+        }
     }
     for (size_t i = 0; i < common.size(); ++i) common[i]->setBounds ((int) i * commonWidth, controlY, commonWidth - 8, commonHeight);
     controlY += common.empty() ? 0 : commonHeight + 10;
@@ -958,6 +1239,8 @@ void EditorContent::resized()
     const int fftTop = my - 21;
     fftSize.setBounds (2, my, fftWidth - 6, 28); oversample.setBounds (fftWidth + 4, my, mw - fftWidth - 6, 28); my += 34;
     window.setBounds (2, my, mw - 4, 26); my += 47;
+    overlapFactor.setBounds (2, my, mw - 4, 27); my += 29;
+    overlapActual.setBounds (0, my, mw, 15); my += 36;
     fftBackground = { 0, fftTop, mw, my - fftTop - 20 };
     place (splitCount); place (crossfade);
     masterContent.setSize (mw, my - 10);
@@ -995,7 +1278,10 @@ void EditorContent::paint (juce::Graphics& g)
         const auto row = getLocalArea (rows[(size_t) selected].get(), rows[(size_t) selected]->getLocalBounds());
         const int y = row.getCentreY();
         // The selected tab grows out of the chain into the page's spine.
-        g.setColour ((bool) displayedChain.getChild (selected)["enabled"] ? Theme::yellow() : Theme::inactive());
+        const auto selectedState = displayedChain.getChild (selected);
+        const bool processing = (bool) selectedState["enabled"] && ! shownResourceLimited && (! scrr::dsp::isPartialEffect (selectedState["type"].toString())
+            || (shownEffectiveSplits > 1 && ! shownPartialSoloBypass));
+        g.setColour (processing ? Theme::yellow() : Theme::inactive());
         if (y >= rackViewport.getY() && y < rackViewport.getBottom())
             g.fillRect (row.getRight(), y - 9, detailArea.getX() - row.getRight() + 3, 18);
         g.fillRect (detailArea.getX(), detailArea.getY(), 3, detailArea.getHeight());

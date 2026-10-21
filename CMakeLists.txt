@@ -5,7 +5,7 @@ if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 project(SpectralCrrpt
-    VERSION 0.2.0
+    VERSION 0.2.5
     DESCRIPTION "Spectral Corruptor - FFT spectral corruption audio plugin"
     LANGUAGES C CXX)
 
@@ -76,6 +76,7 @@ target_sources(SpectralCrrpt PRIVATE
     Source/dsp/DryWetMixer.cpp
     Source/dsp/GainStage.cpp
     Source/dsp/SpectralProcessor.cpp
+    Source/dsp/PartialProcessor.cpp
     Source/modules/SpectralModule.cpp
     Source/gui/AssetCache.cpp
     Source/gui/Skin.cpp
@@ -147,6 +148,9 @@ file(WRITE "${FACTORY_PRESETS_H}" "${_fp_code}")
 
 add_executable(SpectralCrrptTests
     tests/DspFoundationTests.cpp
+    tests/FrequencyRemapTests.cpp
+    tests/PartialProcessorTests.cpp
+    Source/dsp/PartialProcessor.cpp
     Source/dsp/GainStage.cpp
     Source/dsp/DryWetMixer.cpp
     Source/dsp/FFTEngine.cpp

@@ -44,7 +44,7 @@ class FrequencyShift : public SpectralModule
 {
 public:
     const char* getName() const noexcept override { return "FrequencyShift"; }
-    void prepare (double, int n) override { scratch.resize ((size_t) n); reset(); }
+    void prepare (double, int n) override { scratchBuffer (ownScratch).resize ((size_t) n); reset(); }
     void reset() override { phase.fill (0.0); }
     void beginChannel (int c) override { channel = juce::jlimit (0, 1, c); }
     void updateParameters (const juce::ValueTree& s) override
@@ -54,6 +54,7 @@ public:
     }
     void processSpectrum (std::complex<float>* x, int n, double sr) override
     {
+        auto& scratch = scratchBuffer (ownScratch);
         if (! enabled || std::abs (hz) < 1.0e-8f || n < 3 || sr <= 0) return;
         const double shift = hz * (2.0 * (n - 1)) / sr;
         const auto rotation = std::polar (1.0f, (float) phase[(size_t) channel]);
@@ -67,12 +68,12 @@ public:
             x[b] = (scratch[(size_t) a] * (1.0f - fraction) + scratch[(size_t) next] * fraction) * rotation;
         }
         phase[(size_t) channel] = std::remainder (phase[(size_t) channel]
-            + juce::MathConstants<double>::twoPi * shift / 4.0, juce::MathConstants<double>::twoPi);
+            + juce::MathConstants<double>::twoPi * hz * getHopSize (n) / sr, juce::MathConstants<double>::twoPi);
     }
 private:
     bool enabled {}; float hz {}; int channel {};
     std::array<double, 2> phase {};
-    std::vector<std::complex<float>> scratch;
+    std::vector<std::complex<float>> ownScratch;
 };
 
 class HarmonicTracker
@@ -145,7 +146,7 @@ class HarmonicMatch : public SpectralModule
 {
 public:
     const char* getName() const noexcept override { return "HarmonicMatch"; }
-    void prepare (double, int n) override { original.resize ((size_t) n); reset(); }
+    void prepare (double, int n) override { scratchBuffer (ownOriginal).resize ((size_t) n); reset(); }
     void reset() override { tracker.reset(); }
     void beginChannel (int c) override { tracker.beginChannel (c); }
     void updateParameters (const juce::ValueTree& s) override
@@ -176,6 +177,7 @@ public:
     }
     void processSpectrum (std::complex<float>* x, int n, double sr) override
     {
+        auto& original = scratchBuffer (ownOriginal);
         if (! enabled || amount <= 0 || n < 3) return;
         const float f0 = tracker.find (x, n, sr, automatic, fundamental);
         if (f0 <= 0) return;
@@ -212,7 +214,7 @@ public:
     }
 private:
     HarmonicTracker tracker;
-    std::vector<std::complex<float>> original;
+    std::vector<std::complex<float>> ownOriginal;
     bool enabled {}, automatic { true }, resynth {};
     int shape {};
     float fundamental { 220 }, colour { .5f }, width { .25f }, amount {};

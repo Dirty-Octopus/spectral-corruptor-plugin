@@ -34,7 +34,21 @@ juce::ValueTree cleanModule (const juce::ValueTree& source)
     auto result = scrr::dsp::createDefaultModuleState (type);
     result.setProperty ("uid", juce::Uuid().toString(), nullptr);
     result.setProperty ("enabled", (bool) source.getProperty ("enabled", false), nullptr);
+    if (type == "FrequencyRemap") result.setProperty ("remapCurve", scrr::params::TransferCurve::decode (source["remapCurve"].toString()).encode(), nullptr);
     if (type == "Notes") result.setProperty ("notes", source["notes"].toString().substring (0, 65536), nullptr);
+    if (type == "FrequencyRemap")
+    {
+        const auto formula = scrr::params::RemapFormula::decode (source["remapFormula"].toString());
+        result.setProperty ("remapMode", (int) source.getProperty ("remapMode", 0) == 1 ? 1 : 0, nullptr);
+        result.setProperty ("remapFormula", formula.encode(), nullptr);
+        result.setProperty ("formulaView", source["formulaView"].toString().substring (0, 16384), nullptr);
+        for (const auto& parameter : formula.parameters)
+        {
+            const double requested = (double) source.getProperty (parameter.property(), parameter.defaultValue);
+            result.setProperty (parameter.property(), std::isfinite (requested)
+                ? juce::jlimit (parameter.minimum, parameter.maximum, requested) : parameter.defaultValue, nullptr);
+        }
+    }
     for (const auto& p : spec->params)
     {
         auto value = (double) source.getProperty (p.id, p.defaultVal);
@@ -96,13 +110,48 @@ void SpectralCrrptProcessor::parameterChanged (const juce::String&, float)
 void SpectralCrrptProcessor::publishRack (bool structural)
 {
     auto next = std::make_shared<RackSnapshot>();
+    const auto previous = std::atomic_load (&publishedRack);
     for (int i = 0; i < 5; ++i)
     {
         next->chains[(size_t) i] = juce::ValueTree (chainNames[i]);
         for (auto module : rackState.getChildWithName (chainNames[i]))
-            if (module["type"].toString() != "Notes") next->chains[(size_t) i].appendChild (module.createCopy(), nullptr);
+            if (module["type"].toString() != "Notes")
+            {
+                next->chains[(size_t) i].appendChild (module.createCopy(), nullptr);
+                if (module["type"].toString() == "FrequencyRemap" && (bool) module.getProperty ("enabled", true)
+                    && (int) module.getProperty ("remapMode", 0) == 1)
+                {
+                    scrr::dsp::SpectralProcessor::FormulaProgramEntry entry;
+                    entry.uid = module["uid"].toString(); entry.definition = module["remapFormula"].toString();
+                    if (previous) for (const auto& old : previous->formulaPrograms)
+                        if (old.uid == entry.uid && old.definition == entry.definition) { entry.program = old.program; break; }
+                    if (! entry.program)
+                    {
+                        juce::String error;
+                        const auto formula = scrr::params::RemapFormula::decode (entry.definition, &error);
+                        auto program = std::make_shared<scrr::params::FormulaProgram> (scrr::params::FormulaProgram::compile (formula));
+                        if (error.isNotEmpty()) { program->valid = false; program->error = error; }
+                        entry.program = std::move (program);
+                        // Moving canvas blocks or renaming a parameter does not
+                        // invalidate an identical audio program/function table.
+                        if (previous) for (const auto& old : previous->formulaPrograms)
+                            if (old.uid == entry.uid && old.program && old.program->sameEvaluationAs (*entry.program))
+                            { entry.program = old.program; break; }
+                    }
+                    next->formulaPrograms.push_back (std::move (entry));
+                }
+            }
     }
-    for (auto& mapping : macroMappings) describeMacroTarget (mapping);
+    for (auto& mapping : macroMappings) if (mapping.routeUid.isEmpty()) mapping.routeUid = juce::Uuid().toString();
+    // Removing a point/route also removes only its coordinate bindings. Repeat
+    // once owners have been removed; no vector indices identify user targets.
+    for (;;)
+    {
+        std::vector<scrr::params::MacroMapping> valid; valid.reserve (macroMappings.size());
+        for (auto mapping : macroMappings) if (describeMacroTarget (mapping)) valid.push_back (std::move (mapping));
+        const bool complete = valid.size() == macroMappings.size(); macroMappings = std::move (valid);
+        if (complete) break;
+    }
     next->mappings = macroMappings; next->sources = modulators;
     std::atomic_store (&publishedRack, std::shared_ptr<const RackSnapshot> (std::move (next)));
     if (structural) structureRevision.fetch_add (1);
@@ -157,6 +206,7 @@ void SpectralCrrptProcessor::consumeRack()
     if (next == appliedRack) return;
     for (int i = 0; i < 5; ++i)
         spectralProcessor.updateModuleChain (i, next->chains[(size_t) i]);
+    spectralProcessor.setFormulaPrograms (next->formulaPrograms);
     spectralProcessor.setMacroMappings (next->mappings);
     modulationEngine.configure (next->sources, next->mappings);
     appliedRack = std::move (next);
@@ -213,6 +263,9 @@ juce::String SpectralCrrptProcessor::transferModule (int source, const juce::Str
     if (duplicate)
     {
         for (auto m : macroMappings) if (m.channel == source && m.uid == uid) copied.push_back (m);
+        const auto owners = copied;
+        for (const auto& m : macroMappings) if (m.channel == scrr::params::MacroMapping::responseChannel)
+            for (const auto& owner : owners) if (m.uid == owner.routeUid) { copied.push_back (m); break; }
         if (copied.size() + macroMappings.size() > 256) return {};
     }
     recordUndoState();
@@ -227,7 +280,20 @@ juce::String SpectralCrrptProcessor::transferModule (int source, const juce::Str
     }
     to.addChild (module, stageInsertion (to, module, insertion), nullptr);
     if (duplicate)
-        for (auto m : copied) { m.channel = destination; m.uid = nextUid; macroMappings.push_back (std::move (m)); }
+    {
+        std::vector<std::pair<juce::String, juce::String>> routeIds;
+        for (auto& m : copied)
+        {
+            const auto fresh = juce::Uuid().toString(); routeIds.emplace_back (m.routeUid, fresh); m.routeUid = fresh;
+            if (m.channel != scrr::params::MacroMapping::responseChannel) { m.channel = destination; m.uid = nextUid; }
+        }
+        for (auto& m : copied)
+        {
+            if (m.channel == scrr::params::MacroMapping::responseChannel)
+                for (const auto& pair : routeIds) if (m.uid == pair.first) { m.uid = pair.second; break; }
+            macroMappings.push_back (std::move (m));
+        }
+    }
     else
         for (auto& m : macroMappings) if (m.channel == source && m.uid == uid) m.channel = destination;
     presetDirty.store (true); publishRack (true); return nextUid;
@@ -240,8 +306,13 @@ juce::String SpectralCrrptProcessor::copyModule (int channel, const juce::String
     if (! module.isValid()) return {};
     juce::ValueTree copy ("SPECTRAL_EFFECT"); copy.setProperty ("version", 1, nullptr); copy.appendChild (module.createCopy(), nullptr);
     juce::ValueTree sources ("modulators");
-    for (const auto& m : macroMappings) if (m.channel == channel && m.uid == uid)
+    std::vector<juce::String> routeIds;
+    for (const auto& m : macroMappings) if (m.channel == channel && m.uid == uid) routeIds.push_back (m.routeUid);
+    for (const auto& m : macroMappings)
     {
+        const bool direct = m.channel == channel && m.uid == uid;
+        const bool response = m.channel == scrr::params::MacroMapping::responseChannel && std::find (routeIds.begin(), routeIds.end(), m.uid) != routeIds.end();
+        if (! direct && ! response) continue;
         copy.appendChild (m.state(), nullptr);
         if (m.sourceUid.isNotEmpty() && ! sources.getChildWithProperty ("uid", m.sourceUid).isValid())
             for (const auto& source : modulators) if (source.uid == m.sourceUid) sources.appendChild (source.state(), nullptr);
@@ -269,20 +340,34 @@ juce::String SpectralCrrptProcessor::pasteModule (int channel, const juce::Strin
         { modulators.push_back (std::move (source)); modulatorRevision.fetch_add (1); }
     }
     chain.addChild (module, stageInsertion (chain, module, -1), nullptr);
-    for (auto tree : copy) if (tree.hasType ("MAP") && macroMappings.size() < 256)
+    std::vector<std::pair<juce::String, juce::String>> routeIds;
+    for (int pass = 0; pass < 2; ++pass)
+      for (auto tree : copy) if (tree.hasType ("MAP") && macroMappings.size() < 256)
     {
+        const bool response = (int) tree["channel"] == scrr::params::MacroMapping::responseChannel;
+        if (response != (pass == 1)) continue;
+        if (response && ! scrr::params::MacroMapping::hasUniqueSavedRouteId (copy, tree["uid"].toString())) continue;
         const auto parameter = tree["parameter"].toString();
         if (parameter.isEmpty() || parameter.length() > 128) continue;
-        scrr::params::MacroMapping m; m.channel = channel; m.uid = uid; m.parameter = juce::Identifier (parameter);
+        scrr::params::MacroMapping m; m.channel = response ? scrr::params::MacroMapping::responseChannel : channel;
+        m.uid = uid; m.parameter = juce::Identifier (parameter);
+        if (response)
+        {
+            m.uid.clear();
+            for (const auto& pair : routeIds) if (pair.first == tree["uid"].toString()) { m.uid = pair.second; break; }
+            if (m.uid.isEmpty()) continue;
+        }
+        m.routeUid = juce::Uuid().toString();
         m.sourceUid = tree["source"].toString();
         m.macro = (int) tree.getProperty ("macro", -1); m.mode = juce::jlimit (0, 3, (int) tree["mode"]);
         if (! describeMacroTarget (m)) continue;
         const double a = (double) tree["startOffset"], b = (double) tree["endOffset"];
         m.startOffset = std::isfinite (a) ? juce::jlimit (-1.0, 1.0, a) : 0;
         m.endOffset = std::isfinite (b) ? juce::jlimit (-1.0, 1.0, b) : 0;
-        m.centre = (double) module[m.parameter]; m.syncRange();
+        m.readResponseCurve (tree);
+        m.centre = macroBase (m); m.syncRange();
         if (std::none_of (macroMappings.begin(), macroMappings.end(), [&] (const auto& existing) { return existing.sameTarget (m) && existing.sameSource (m); }))
-            macroMappings.push_back (std::move (m));
+        { routeIds.emplace_back (tree["routeUid"].toString(), m.routeUid); macroMappings.push_back (std::move (m)); }
     }
     presetDirty.store (true); publishRack (true); return uid;
 }
@@ -296,14 +381,40 @@ void SpectralCrrptProcessor::setModuleParameter (int channel, const juce::String
         if (module["uid"].toString() == uid)
         {
             if (key == juce::Identifier ("type") || key == juce::Identifier ("uid")) return;
+            uint32_t pointId {}; bool xAxis {};
+            if (module["type"].toString() == "FrequencyRemap" && scrr::params::parseCurveCoordinateParameter (key, pointId, xAxis))
+            {
+                auto curve = scrr::params::TransferCurve::decode (module["remapCurve"].toString());
+                if (! curve.setCoordinate (pointId, xAxis, (double) value)) return;
+                const auto encoded = curve.encode(); if (encoded == module["remapCurve"].toString()) return;
+                recordUndoState(); module.setProperty ("remapCurve", encoded, nullptr); presetDirty.store (true); publishRack (false); return;
+            }
             auto candidate = module.createCopy();
             candidate.setProperty (key, value, nullptr);
             auto clean = cleanModule (candidate);
             if (! clean.hasProperty (key)) return;
             if (module[key] == clean[key]) return;
             recordUndoState();
+            if (module["type"].toString() == "FrequencyRemap" && key == juce::Identifier ("remapFormula"))
+            {
+                // Graph, parameter definitions, removed values and range clamps
+                // form one undo transaction; publication revalidates its routes.
+                for (int i = module.getNumProperties(); --i >= 0;)
+                {
+                    const auto property = module.getPropertyName (i);
+                    if (property.toString().startsWith ("formulaParam_") && ! clean.hasProperty (property)) module.removeProperty (property, nullptr);
+                }
+                for (int i = 0; i < clean.getNumProperties(); ++i)
+                {
+                    const auto property = clean.getPropertyName (i);
+                    if (property.toString().startsWith ("formulaParam_")) module.setProperty (property, clean[property], nullptr);
+                }
+                module.setProperty (key, clean[key], nullptr);
+                presetDirty.store (true); publishRack (true); return;
+            }
             module.setProperty (key, clean[key], nullptr);
             presetDirty.store (true);
+            if (key == juce::Identifier ("formulaView")) return;
             if (module["type"].toString() != "Notes" || key != juce::Identifier ("notes")) publishRack (false);
             return;
         }
@@ -329,7 +440,10 @@ juce::ValueTree SpectralCrrptProcessor::copyPresetState()
     result.appendChild (names, nullptr);
     result.removeChild (result.getChildWithName ("macroMappings"), nullptr);
     juce::ValueTree mappings ("macroMappings");
-    for (const auto& m : macroMappings) mappings.appendChild (m.state(), nullptr);
+    // Bases and ranges may change independently of their routes (including
+    // host automation and custom Formula ranges). Save the same canonical
+    // values restoration produces, so Undo does not invalidate its own Redo.
+    for (const auto& m : getMacroMappings()) mappings.appendChild (m.state(), nullptr);
     result.appendChild (mappings, nullptr);
     result.removeChild (result.getChildWithName ("modulators"), nullptr);
     juce::ValueTree sources ("modulators");
@@ -431,6 +545,8 @@ bool SpectralCrrptProcessor::applyPreset (const juce::ValueTree& preset)
         };
         defaultParameter (scrr::params::id::fftSizeExtended, 0);
         defaultParameter (scrr::params::id::frequencyLimit, 2);
+        defaultParameter (scrr::params::id::windowTypeExtended, 0);
+        defaultParameter (scrr::params::id::overlapFactor, 4);
         for (const auto& id : scrr::params::id::channelEnabled) defaultParameter (id, 1);
         apvts.replaceState (globals);
     }
@@ -440,6 +556,8 @@ bool SpectralCrrptProcessor::applyPreset (const juce::ValueTree& preset)
             apvts.getParameter (macroId)->setValueNotifyingHost (0.0f);
         auto* limit = apvts.getParameter (scrr::params::id::frequencyLimit);
         limit->setValueNotifyingHost (limit->getDefaultValue());
+        for (const auto& id : { scrr::params::id::windowTypeExtended, scrr::params::id::overlapFactor })
+            apvts.getParameter (id)->setValueNotifyingHost (apvts.getParameter (id)->getDefaultValue());
     }
     macroNames.fill ({});
     for (auto name : preset.getChildWithName ("macroNames"))

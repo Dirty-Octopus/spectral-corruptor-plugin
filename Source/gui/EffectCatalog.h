@@ -10,6 +10,7 @@ inline juce::String effectFolder (const juce::String& type)
 {
     if (type == "Notes") return "FILTER / UTILITY";
     if (scrr::dsp::isGenericEffect (type)) return "GENERIC";
+    if (scrr::dsp::isPartialEffect (type)) return "PARTIAL";
     if (type.startsWith ("Harmonic") || type == "SpectralContrast") return "HARMONICS";
     if (type.startsWith ("Frequency") || type == "SpectralMirror" || type == "BinTeleport") return "FREQUENCY";
     if (type.contains ("Phase") || type == "ComplexRotation" || type == "SpectralDispersion") return "PHASE";
@@ -26,12 +27,18 @@ inline juce::String effectMotto (const juce::String& type)
     if (type == "HarmonicMatch") return "REWRITE THE OVERTONES";
     if (type == "HarmonicSculpt") return "ODD. EVEN. YOUR RULES.";
     if (type == "SpectralContrast") return "PULL THE DETAIL FORWARD";
+    if (type == "PartialStretcher") return "STRETCH THE PARTIAL RELATIONSHIPS";
+    if (type == "PartialStiffString") return "BEND THE HARMONIC SERIES";
+    if (type == "PartialCentroid") return "BRING THE PARTIALS TOGETHER";
+    if (type == "PartialPGrid") return "PLACE PARTIALS ON A PITCH GRID";
+    if (type == "PartialFGrid") return "PLACE PARTIALS ON A FREQUENCY GRID";
     if (type == "SpectralJPEG") return "BEAUTY IN THE ARTIFACTS";
     if (type == "SpectralPixelation") return "LESS RESOLUTION. MORE CHARACTER.";
     if (type == "SpectralMirror") return "TURN THE SPECTRUM INSIDE OUT";
     if (type == "SpectralBloom") return "LET THE PARTIALS BLEED";
     if (type == "SpectralComb") return "CUT A RHYTHM INTO FREQUENCY";
     if (type == "FrequencyShift") return "MOVE BEYOND THE HARMONIC GRID";
+    if (type == "FrequencyRemap") return "DRAW WHERE FREQUENCIES GO";
     if (type == "FrequencyWarp") return "BEND THE FREQUENCY AXIS";
     if (type == "FrequencyDrift") return "NOTHING STAYS IN PLACE";
     if (type == "BinShuffle") return "REARRANGE THE EVIDENCE";

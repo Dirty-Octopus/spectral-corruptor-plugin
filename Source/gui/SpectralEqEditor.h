@@ -14,10 +14,11 @@ public:
     {
         setComponentID ("spectral-eq-editor");
         setWantsKeyboardFocus (true);
-        setTooltip ("Drag: frequency / gain. Alt/Option-drag: fine. Scroll: Q. Double-click: reset band. Right-click: band shape / bypass.");
+        setTooltip ("Drag: frequency / gain. Alt/Option-drag: fine. Scroll: Q. Double-click: reset band. Right-click: assign X/Y modulation, band shape or bypass.");
     }
     std::function<void(const juce::String&, const juce::var&)> onParameterChange;
     std::function<void(int)> onBandSelected;
+    std::function<void(juce::Component&, const juce::String&)> mappingMenu;
     void setState (const juce::ValueTree& next)
     {
         if (getModuleUid() != next["uid"].toString()) dragging = false;
@@ -168,6 +169,9 @@ private:
     void showBandMenu()
     {
         juce::PopupMenu menu;
+        menu.addItem (20, "Assign X / Frequency", (bool) mappingMenu);
+        menu.addItem (21, "Assign Y / Gain", (bool) mappingMenu && bands[(size_t) selected].type < scrr::dsp::SpectralEqBand::LowCut);
+        menu.addSeparator();
         const juce::StringArray names { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut" };
         for (int i = 0; i < names.size(); ++i) menu.addItem (i + 1, names[i], true, bands[(size_t) selected].type == i);
         menu.addSeparator(); menu.addItem (10, "Band enabled", true, bands[(size_t) selected].enabled);
@@ -181,6 +185,12 @@ private:
             if (result >= 1 && result <= 5) safe->change ("Type", result - 1);
             else if (result == 10) safe->change ("Enabled", ! safe->bands[(size_t) target].enabled);
             else if (result == 11) safe->resetBand();
+            else if ((result == 20 || result == 21) && safe->mappingMenu)
+                juce::MessageManager::callAsync ([safe, targetUid, target, result]
+                {
+                    if (safe && safe->getModuleUid() == targetUid && safe->mappingMenu)
+                        safe->mappingMenu (*safe, "band" + juce::String (target + 1) + (result == 20 ? "Freq" : "Gain"));
+                });
         });
     }
     juce::ValueTree state { "module" };

@@ -43,7 +43,7 @@ public:
             return;
 
         const uint32_t baseSeed = seedRandom.next (0x504e4f49u, true, rateHz,
-                                                   numBins, sampleRate, 0x50484e32u);
+                                                   numBins, sampleRate, 0x50484e32u, getHopSize (numBins));
         juce::Random rng ((int) baseSeed);
 
         const float maxPhase = amount * juce::MathConstants<float>::pi;

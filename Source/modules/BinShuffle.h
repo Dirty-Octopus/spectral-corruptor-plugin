@@ -26,6 +26,8 @@ public:
     void prepare (double sampleRate, int numBins) override
     {
         juce::ignoreUnused (sampleRate);
+        auto& perm = scratchBuffer (ownPerm);
+        auto& temp = scratchBuffer (ownTemp);
         perm.resize ((size_t) numBins);
         temp.resize ((size_t) numBins);
         rng = juce::Random (seed);
@@ -48,6 +50,8 @@ public:
 
     void processSpectrum (std::complex<float>* spectrum, int numBins, double sampleRate) override
     {
+        auto& perm = scratchBuffer (ownPerm);
+        auto& temp = scratchBuffer (ownTemp);
         juce::ignoreUnused (sampleRate);
         if (! enabled || amount <= 0.0f || numBins <= 2)
             return;
@@ -88,8 +92,8 @@ private:
 
     juce::Random rng;
 
-    std::vector<int> perm;
-    std::vector<std::complex<float>> temp;
+    std::vector<int> ownPerm;
+    std::vector<std::complex<float>> ownTemp;
 };
 
 } // namespace scrr::dsp

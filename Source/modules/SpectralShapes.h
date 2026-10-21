@@ -13,7 +13,7 @@ class SpectralMirror : public SpectralModule
 {
 public:
     const char* getName() const noexcept override { return "SpectralMirror"; }
-    void prepare (double, int n) override { original.resize ((size_t) n); reset(); }
+    void prepare (double, int n) override { scratchBuffer (ownOriginal).resize ((size_t) n); reset(); }
     void reset() override { phase.fill (0); }
     void beginChannel (int c) override { channel = juce::jlimit (0, 1, c); }
     void updateParameters (const juce::ValueTree& s) override
@@ -24,6 +24,7 @@ public:
     }
     void processSpectrum (std::complex<float>* x, int n, double sr) override
     {
+        auto& original = scratchBuffer (ownOriginal);
         if (! enabled || amount <= 0 || n < 3 || sr <= 0 || (size_t) n > original.size()) return;
         const double twicePivotBin = 2.0 * pivot * (2.0 * (n - 1)) / sr;
         const auto rotation = std::polar (1.0f, (float) phase[(size_t) channel]);
@@ -39,21 +40,26 @@ public:
             }
             x[b] = original[(size_t) b] * (1 - amount) + reflected * amount;
         }
-        // Fixed N/4 hop, matching FFTEngine. Conjugation reverses the incoming
+        // Conjugation reverses the incoming
         // phase progression; this carrier restores 2*pivot - source frequency.
-        phase[(size_t) channel] = std::remainder (phase[(size_t) channel] + juce::MathConstants<double>::twoPi * twicePivotBin / 4,
+        phase[(size_t) channel] = std::remainder (phase[(size_t) channel] + juce::MathConstants<double>::twoPi * 2.0 * pivot * getHopSize (n) / sr,
                                                  juce::MathConstants<double>::twoPi);
     }
 private:
     bool enabled {}; float amount {}, pivot { 1000 }; int channel {};
-    std::array<double, 2> phase {}; std::vector<std::complex<float>> original;
+    std::array<double, 2> phase {}; std::vector<std::complex<float>> ownOriginal;
 };
 
 class SpectralBloom : public SpectralModule
 {
 public:
     const char* getName() const noexcept override { return "SpectralBloom"; }
-    void prepare (double, int n) override { prefix.resize ((size_t) n + 1); blurred.resize ((size_t) n); reset(); }
+    void prepare (double, int n) override
+    {
+        scratchBuffer (ownPrefix, 0).resize ((size_t) n + 1);
+        scratchBuffer (ownBlurred, 1).resize ((size_t) n);
+        reset();
+    }
     void reset() override { frame.fill (0); }
     void beginChannel (int c) override { channel = juce::jlimit (0, 1, c); }
     void updateParameters (const juce::ValueTree& s) override
@@ -64,6 +70,8 @@ public:
     }
     void processSpectrum (std::complex<float>* x, int n, double sr) override
     {
+        auto& prefix = scratchBuffer (ownPrefix, 0);
+        auto& blurred = scratchBuffer (ownBlurred, 1);
         if (! enabled || amount <= 0 || n < 3 || sr <= 0 || (size_t) n > blurred.size()) return;
         prefix[0] = prefix[1] = 0;
         for (int b = 1; b < n - 1; ++b) prefix[(size_t) b + 1] = prefix[(size_t) b] + (double) std::norm (x[b]);
@@ -79,6 +87,7 @@ public:
         }
         const double normalise = inputPower / std::max (1e-20, outputPower);
         const int clock = frame[(size_t) channel];
+        const int fftSize = 2 * (n - 1);
         for (int b = 1; b < n - 1; ++b)
         {
             const float power = std::norm (x[b]);
@@ -86,14 +95,15 @@ public:
             // Retain occupied-bin phase. Newly lit bins receive coherent bin
             // oscillators, with a deterministic offset instead of random noise.
             const float angle = power > 1e-20f ? std::arg (x[b])
-                : (float) ((b * clock) % 4) * juce::MathConstants<float>::halfPi + (float) (b % 7) * .41f;
+                : (float) (juce::MathConstants<double>::twoPi * ((int64_t) b * clock % fftSize) / fftSize)
+                    + (float) (b % 7) * .41f;
             x[b] = std::polar (amplitude, angle);
         }
-        frame[(size_t) channel] = (clock + 1) % 4;
+        frame[(size_t) channel] = (clock + getHopSize (n)) % fftSize;
     }
 private:
     bool enabled {}; float amount {}, spread { 150 }; int channel {};
-    std::array<int, 2> frame {}; std::vector<double> prefix, blurred;
+    std::array<int, 2> frame {}; std::vector<double> ownPrefix, ownBlurred;
 };
 
 class SpectralComb : public SpectralModule

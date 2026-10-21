@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Dirty Octopus
 
 #include "FFTEngine.h"
+#include <stdexcept>
 
 namespace scrr::dsp {
 
@@ -10,15 +11,17 @@ FFTEngine::FFTEngine()
     configure (2048, 512, WindowType::Hann);
 }
 
-void FFTEngine::configure (int newFftSize, int newHopSize, WindowType wt)
+void FFTEngine::configure (int newFftSize, int newHopSize, WindowType wt, bool legacyNormalization)
 {
-    jassert (newFftSize >= kMinFFTSize && newFftSize <= kMaxFFTSize);
-    jassert ((newFftSize & (newFftSize - 1)) == 0 && "FFT size must be power of 2");
-    jassert (newHopSize > 0 && newFftSize % newHopSize == 0 && "FFT size must be multiple of hop");
+    if (newFftSize < kMinFFTSize || newFftSize > kMaxFFTSize
+        || (newFftSize & (newFftSize - 1)) != 0
+        || newHopSize <= 0 || newHopSize > newFftSize)
+        throw std::invalid_argument ("Invalid FFT size or hop size");
 
     fftSize    = newFftSize;
     hopSize    = newHopSize;
     windowType = wt;
+    useLegacyNormalization = legacyNormalization;
 
     int order = 0;
     for (int n = fftSize; n > 1; n >>= 1) ++order;
@@ -42,6 +45,25 @@ float FFTEngine::windowSample (WindowType wt, int n, int size) noexcept
         case WindowType::Hann:        return 0.5f  - 0.5f  * std::cos (a);
         case WindowType::Hamming:     return 0.54f - 0.46f * std::cos (a);
         case WindowType::Blackman:    return 0.42f - 0.5f  * std::cos (a) + 0.08f * std::cos (2.0f * a);
+        case WindowType::BlackmanHarris:
+            return 0.35875f - 0.48829f * std::cos (a) + 0.14128f * std::cos (2.0f * a)
+                - 0.01168f * std::cos (3.0f * a);
+        case WindowType::Gaussian:
+        {
+            // Sigma is 0.4 times the half-window length.
+            const double position = (2.0 * n / (size - 1) - 1.0) / 0.4;
+            return (float) std::exp (-0.5 * position * position);
+        }
+        case WindowType::FlatTop:
+            return 0.21557895f - 0.41663158f * std::cos (a) + 0.277263158f * std::cos (2.0f * a)
+                - 0.083578947f * std::cos (3.0f * a) + 0.006947368f * std::cos (4.0f * a);
+        case WindowType::Welch:
+        {
+            const double position = 2.0 * n / (size - 1) - 1.0;
+            return (float) (1.0 - position * position);
+        }
+        case WindowType::Triangle:
+            return (float) (1.0 - std::abs (2.0 * n / (size - 1) - 1.0));
         case WindowType::Rectangular:
         default:                      return 1.0f;
     }
@@ -50,16 +72,27 @@ float FFTEngine::windowSample (WindowType wt, int n, int size) noexcept
 void FFTEngine::updateWindow()
 {
     window.resize ((size_t) fftSize);
-    windowSum = 0.0f;
+    synthesisWindow.resize ((size_t) fftSize);
+    float windowSum = 0.0f; // Keep the legacy accumulation order for old projects.
+    std::vector<double> overlapEnergy ((size_t) hopSize, 0.0);
     windowAmplitudeSum = 0.0;
     for (int n = 0; n < fftSize; ++n)
     {
         window[(size_t) n] = windowSample (windowType, n, fftSize);
         windowSum += window[(size_t) n] * window[(size_t) n];
         windowAmplitudeSum += (double) window[(size_t) n];
+        overlapEnergy[(size_t) (n % hopSize)] += (double) window[(size_t) n] * window[(size_t) n];
     }
-    // COLA normalization: reconstruction factor = windowSum / hop -> inverse = hop / windowSum.
-    norm = (windowSum > 0.0f) ? (float) hopSize / windowSum : 1.0f;
+    // A dual synthesis window normalizes each overlap position separately.
+    // Residue classes also cover hops which do not divide the FFT size.
+    for (const double energy : overlapEnergy)
+        if (! std::isfinite (energy) || energy <= 1.0e-12)
+            throw std::invalid_argument ("Window and hop leave uncovered samples");
+    legacyNorm = (float) hopSize / windowSum;
+    for (int n = 0; n < fftSize; ++n)
+        synthesisWindow[(size_t) n] = useLegacyNormalization
+            ? window[(size_t) n] * legacyNorm
+            : (float) (window[(size_t) n] / overlapEnergy[(size_t) (n % hopSize)]);
 }
 
 void FFTEngine::prepare (double sampleRate, int maxBlockSize, int numChannels)
@@ -139,7 +172,10 @@ void FFTEngine::processOutputs (const float* input, const std::array<float*, 4>&
                 { fftReal[(size_t) (2 * b)] = route[b].real(); fftReal[(size_t) (2 * b + 1)] = route[b].imag(); }
                 std::fill (fftReal.begin() + 2 * bins, fftReal.end(), 0);
                 fft->performRealOnlyInverseTransform (fftReal.data());
-                for (int n = 0; n < fftSize; ++n) out.accum[(size_t) n] += fftReal[(size_t) n] * window[(size_t) n] * norm;
+                for (int n = 0; n < fftSize; ++n)
+                    out.accum[(size_t) n] += useLegacyNormalization
+                        ? fftReal[(size_t) n] * window[(size_t) n] * legacyNorm
+                        : fftReal[(size_t) n] * synthesisWindow[(size_t) n];
                 for (int n = 0; n < hopSize; ++n)
                 {
                     out.fifo[(size_t) out.write] = out.accum[(size_t) n];

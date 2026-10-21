@@ -3,6 +3,7 @@
 
 #include "PluginProcessor.h"
 #include "modules/ModuleSpecs.h"
+#include "parameters/RemapFormula.h"
 #include <algorithm>
 
 using scrr::params::MacroMapping;
@@ -12,7 +13,7 @@ void boundRange (MacroMapping& m)
     const auto bound = [] (double v) { return std::isfinite (v) ? juce::jlimit (-1.0, 1.0, v) : 0.0; };
     m.startOffset = bound (m.startOffset); m.endOffset = bound (m.endOffset);
     m.centre = juce::jlimit (m.minimum, m.maximum, std::isfinite (m.centre) ? m.centre : m.minimum);
-    m.mode = juce::jlimit (0, 3, m.mode); m.relative = true; m.syncRange();
+    m.mode = juce::jlimit (0, 3, m.mode); m.responseCurve.sanitise (true, m.bipolar()); m.relative = true; m.syncRange();
 }
 }
 juce::String SpectralCrrptProcessor::getMacroName (int index) const
@@ -45,7 +46,7 @@ scrr::params::MacroValues SpectralCrrptProcessor::getMacroValues() const noexcep
 }
 bool SpectralCrrptProcessor::describeMacroTarget (MacroMapping& m) const
 {
-    if (m.channel < 0 || m.channel > MacroMapping::modulationChannel) return false;
+    if (m.channel < 0 || m.channel > MacroMapping::responseChannel) return false;
     if (m.sourceUid.isEmpty()) { if (m.macro < 0 || m.macro >= 8) return false; m.sourceName = getMacroLabel (m.macro); }
     else
     {
@@ -54,12 +55,53 @@ bool SpectralCrrptProcessor::describeMacroTarget (MacroMapping& m) const
         { m.sourceIndex = 8 + (int) i; m.sourceName = modulators[i].name; m.sourceEnabled = modulators[i].enabled; break; }
         if (m.sourceIndex < 0) return false;
     }
+    uint32_t pointId {}; bool xAxis {};
+    const bool pointTarget = scrr::params::parseCurveCoordinateParameter (m.parameter, pointId, xAxis);
+    m.coordinatePointId = pointTarget ? pointId : 0; m.coordinateXAxis = xAxis;
+    const auto coordinate = [&] (const juce::String& owner)
+    {
+        m.minimum = 0; m.maximum = 1; m.step = .00001; m.logarithmic = false; m.unit = "";
+        m.label = owner + " / POINT " + juce::String ((juce::int64) pointId) + (xAxis ? " / X" : " / Y"); return true;
+    };
+    const auto acyclicSourceTarget = [&] (const juce::String& target)
+    {
+        if (m.sourceUid.isEmpty()) return true;
+        if (m.sourceUid == target) return false;
+        std::vector<juce::String> reached { target };
+        for (size_t i = 0; i < reached.size(); ++i)
+            for (const auto& route : macroMappings) if (route.sourceUid == reached[i])
+            {
+                juce::String destination;
+                if (route.channel == MacroMapping::modulationChannel) destination = route.uid;
+                else if (route.channel == MacroMapping::responseChannel)
+                    for (const auto& owner : macroMappings) if (owner.routeUid == route.uid && owner.channel == MacroMapping::modulationChannel) destination = owner.uid;
+                if (destination.isEmpty()) continue;
+                if (destination == m.sourceUid) return false;
+                if (std::find (reached.begin(), reached.end(), destination) == reached.end()) reached.push_back (destination);
+            }
+        return true;
+    };
+    if (m.channel == MacroMapping::responseChannel)
+    {
+        if (! pointTarget) return false;
+        for (const auto& owner : macroMappings) if (owner.routeUid == m.uid)
+            return ! scrr::params::isCurveCoordinateParameter (owner.parameter)
+                && (owner.channel != MacroMapping::modulationChannel || acyclicSourceTarget (owner.uid))
+                && owner.responseCurve.canMapCoordinate (pointId, xAxis, true, owner.bipolar())
+                && coordinate ("RESPONSE / " + owner.sourceLabel());
+        return false;
+    }
     if (m.channel == MacroMapping::modulationChannel)
     {
-        // Source settings accept macros only, avoiding self-routing and cycles.
-        if (m.sourceUid.isNotEmpty()) return false;
+        // Scalar source controls keep the existing macro-only contract. Curve
+        // coordinates also accept source outputs, with a strict acyclic graph.
+        if (m.sourceUid.isNotEmpty())
+        {
+            if (! pointTarget || ! acyclicSourceTarget (m.uid)) return false;
+        }
         for (const auto& source : modulators) if (source.uid == m.uid)
         {
+            if (pointTarget) return source.canMapCoordinate (pointId, xAxis) && coordinate ("MODULATION / " + source.name);
             scrr::dsp::ParamSpec spec;
             const auto& key = m.parameter.toString();
             using scrr::dsp::makeFloat;
@@ -76,7 +118,7 @@ bool SpectralCrrptProcessor::describeMacroTarget (MacroMapping& m) const
         }
         return false;
     }
-    if (m.channel == 0)
+    if (m.channel == 0 && m.uid.isEmpty())
     {
         using namespace scrr::params;
         const auto paramId = m.parameter.toString();
@@ -87,18 +129,26 @@ bool SpectralCrrptProcessor::describeMacroTarget (MacroMapping& m) const
         m.step = p->getNormalisableRange().interval; m.logarithmic = false;
         m.label = "MASTER / " + p->getName (64); m.unit = p->getLabel(); return true;
     }
-    for (auto child : rackState.getChildWithName ("ch" + juce::String (m.channel)))
+    const auto rackName = m.channel == 0 ? juce::String ("ALL") : "CH " + juce::String (m.channel);
+    for (auto child : rackState.getChildWithName (m.channel == 0 ? juce::Identifier ("modules") : juce::Identifier ("ch" + juce::String (m.channel))))
     {
         if (child["uid"].toString() != m.uid) continue;
         auto* spec = scrr::dsp::findModuleSpec (child["type"].toString()); if (! spec || spec->typeId == "Notes") return false;
+        if (pointTarget)
+            return spec->typeId == "FrequencyRemap" && scrr::params::TransferCurve::decode (child["remapCurve"].toString()).canMapCoordinate (pointId, xAxis)
+                && coordinate (rackName + " / FREQUENCY REMAP");
         auto accept = [&] (const scrr::dsp::ParamSpec& p)
         {
             m.minimum = p.minVal; m.maximum = p.maxVal; m.step = p.step; m.logarithmic = p.logScale; m.unit = p.unit;
-            m.label = "CH " + juce::String (m.channel) + " / " + spec->displayName + " / " + p.label; return true;
+            m.label = rackName + " / " + spec->displayName + " / " + p.label; return true;
         };
         for (const auto& p : spec->params)
             if (m.parameter == juce::Identifier (p.id) && (p.type == scrr::dsp::ParamSpec::Float || p.type == scrr::dsp::ParamSpec::Int)) return accept (p);
-        if (! scrr::dsp::isGenericEffect (spec->typeId))
+        if (spec->typeId == "FrequencyRemap")
+            for (const auto& p : scrr::params::RemapFormula::decode (child["remapFormula"].toString()).parameters)
+                if (m.parameter == p.property() && scrr::params::validFormulaParameter (p))
+                { m.minimum = p.minimum; m.maximum = p.maximum; m.step = p.step; m.logarithmic = p.logarithmic; m.unit.clear(); m.label = rackName + " / " + spec->displayName + " / " + p.name; return true; }
+        if (! scrr::dsp::isGenericEffect (spec->typeId) && ! scrr::dsp::isPartialEffect (spec->typeId))
         {
             if (m.parameter == juce::Identifier ("rangeLow")) return accept (scrr::dsp::makeFloat ("rangeLow", "LOW / Hz", 0, getFrequencyLimit(), 0, 1, " Hz"));
             if (m.parameter == juce::Identifier ("rangeHigh")) return accept (scrr::dsp::makeFloat ("rangeHigh", "HIGH / Hz", 0, getFrequencyLimit(), getFrequencyLimit(), 1, " Hz"));
@@ -110,14 +160,28 @@ bool SpectralCrrptProcessor::describeMacroTarget (MacroMapping& m) const
 }
 double SpectralCrrptProcessor::macroBase (const MacroMapping& m) const
 {
+    uint32_t pointId {}; bool xAxis {};
+    const bool pointTarget = scrr::params::parseCurveCoordinateParameter (m.parameter, pointId, xAxis);
+    if (m.channel == MacroMapping::responseChannel)
+    {
+        for (const auto& owner : macroMappings) if (owner.routeUid == m.uid)
+            for (auto point : owner.responseCurve.points) if (point.id == pointId) return xAxis ? point.x : point.y;
+        return m.centre;
+    }
     if (m.channel == MacroMapping::modulationChannel)
     {
         for (const auto& source : modulators) if (source.uid == m.uid) return source.parameterValue (m.parameter);
         return m.centre;
     }
-    if (m.channel == 0) return apvts.getRawParameterValue (m.parameter.toString())->load();
-    for (auto child : rackState.getChildWithName ("ch" + juce::String (m.channel)))
-        if (child["uid"].toString() == m.uid) return juce::jlimit (m.minimum, m.maximum, (double) child[m.parameter]);
+    if (m.channel == 0 && m.uid.isEmpty()) return apvts.getRawParameterValue (m.parameter.toString())->load();
+    for (auto child : rackState.getChildWithName (m.channel == 0 ? juce::Identifier ("modules") : juce::Identifier ("ch" + juce::String (m.channel))))
+        if (child["uid"].toString() == m.uid)
+        {
+            if (pointTarget)
+                for (auto point : scrr::params::TransferCurve::decode (child["remapCurve"].toString()).points)
+                    if (point.id == pointId) return xAxis ? point.x : point.y;
+            return juce::jlimit (m.minimum, m.maximum, (double) child[m.parameter]);
+        }
     return m.centre;
 }
 std::vector<MacroMapping> SpectralCrrptProcessor::getMacroMappings() const
@@ -129,10 +193,11 @@ std::vector<MacroMapping> SpectralCrrptProcessor::getMacroMappings() const
 double SpectralCrrptProcessor::getEffectiveValue (int channel, const juce::String& uid, const juce::Identifier& parameter, double fallback) const
 {
     const juce::ScopedLock lock (stateLock);
+    const auto values = getModulationValues();
     const MacroMapping* target {}; double sum = 0;
     for (const auto& m : macroMappings)
-        if (m.channel == channel && m.uid == uid && m.parameter == parameter && m.sourceEnabled)
-        { target = &m; sum += m.offset (m.sourceUid.isEmpty() ? macroParameters[(size_t) m.macro]->load() * .01f : modulationEngine.value (m.sourceIndex - 8)); }
+        if (m.channel == channel && m.uid == uid && m.parameter == parameter && m.sourceEnabled && m.valueIndex() >= 0 && (size_t) m.valueIndex() < values.size())
+        { target = &m; auto resolved = m; resolved.bindResponseMappings (macroMappings); sum += resolved.offset (values[(size_t) m.valueIndex()], &values); }
     if (! target) return fallback;
     auto current = *target;
     if (parameter == juce::Identifier ("rangeLow") || parameter == juce::Identifier ("rangeHigh")) current.maximum = getFrequencyLimit();
@@ -141,7 +206,7 @@ double SpectralCrrptProcessor::getEffectiveValue (int channel, const juce::Strin
 void SpectralCrrptProcessor::assignMacro (int macro, int channel, const juce::String& uid, const juce::Identifier& parameter)
 {
     const juce::ScopedLock lock (stateLock);
-    MacroMapping next; next.macro = macro; next.channel = channel; next.uid = uid; next.parameter = parameter;
+    MacroMapping next; next.routeUid = juce::Uuid().toString(); next.macro = macro; next.channel = channel; next.uid = uid; next.parameter = parameter;
     if (! describeMacroTarget (next) || macroMappings.size() >= 256) return;
     for (const auto& m : macroMappings) if (m.sameTarget (next) && m.sourceUid.isEmpty() && m.macro == macro) return;
     recordUndoState();
@@ -164,38 +229,67 @@ void SpectralCrrptProcessor::updateMacroMapping (MacroMapping next)
     for (auto& m : macroMappings) if (m.sameTarget (next) && m.sameSource (next))
     {
         if (std::abs (macroBase (next) - next.centre) > juce::jmax (1.0e-6, next.step * .001)
-            || m.startOffset != next.startOffset || m.endOffset != next.endOffset || m.mode != next.mode)
+            || std::abs (m.startOffset - next.startOffset) > 0 || std::abs (m.endOffset - next.endOffset) > 0 || m.mode != next.mode
+            || ! m.responseCurve.sameStateAs (next.responseCurve))
             recordUndoState();
         // Centre changes in the mapping list are ordinary base parameter edits.
         if (std::abs (macroBase (next) - next.centre) > juce::jmax (1.0e-6, next.step * .001))
         {
-            if (next.channel == MacroMapping::modulationChannel)
+            uint32_t pointId {}; bool xAxis {}; const bool pointTarget = scrr::params::parseCurveCoordinateParameter (next.parameter, pointId, xAxis);
+            if (next.channel == MacroMapping::responseChannel)
             {
-                for (auto& source : modulators) if (source.uid == next.uid) source.setParameterValue (next.parameter, next.centre);
+                for (auto& owner : macroMappings) if (owner.routeUid == next.uid)
+                    owner.responseCurve.setCoordinate (pointId, xAxis, next.centre, true, owner.bipolar());
             }
-            else if (next.channel == 0)
+            else if (next.channel == MacroMapping::modulationChannel)
+            {
+                for (auto& source : modulators) if (source.uid == next.uid)
+                {
+                    if (pointTarget)
+                    {
+                        scrr::params::TransferCurve curve; curve.points = source.points;
+                        curve.setCoordinate (pointId, xAxis, next.centre); source.points = std::move (curve.points);
+                    }
+                    else source.setParameterValue (next.parameter, next.centre);
+                }
+            }
+            else if (next.channel == 0 && next.uid.isEmpty())
             {
                 auto* p = apvts.getParameter (next.parameter.toString());
                 p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 ((float) next.centre)); p->endChangeGesture();
             }
-            else for (auto child : rackState.getChildWithName ("ch" + juce::String (next.channel)))
-                if (child["uid"].toString() == next.uid) child.setProperty (next.parameter, next.centre, nullptr);
+            else for (auto child : rackState.getChildWithName (next.channel == 0 ? juce::Identifier ("modules") : juce::Identifier ("ch" + juce::String (next.channel))))
+                if (child["uid"].toString() == next.uid)
+                {
+                    if (pointTarget)
+                    {
+                        auto curve = scrr::params::TransferCurve::decode (child["remapCurve"].toString());
+                        curve.setCoordinate (pointId, xAxis, next.centre); child.setProperty ("remapCurve", curve.encode(), nullptr);
+                    }
+                    else child.setProperty (next.parameter, next.centre, nullptr);
+                }
         }
+        next.routeUid = m.routeUid;
         m = std::move (next); presetDirty.store (true); publishRack (false); return;
     }
 }
 void SpectralCrrptProcessor::restoreMacroMappings (const juce::ValueTree& tree, const std::map<juce::String, juce::String>& ids)
 {
     macroMappings.clear();
-    for (auto child : tree)
+    std::map<juce::String, int> savedOrder;
+    for (int pass = 0; pass < 2; ++pass) for (auto child : tree)
     {
         if (! child.hasType ("MAP") || macroMappings.size() >= 256) continue;
+        if (((int) child["channel"] == MacroMapping::responseChannel) != (pass == 1)) continue;
+        if (pass == 1 && ! MacroMapping::hasUniqueSavedRouteId (tree, child["uid"].toString())) continue;
         MacroMapping m; m.macro = (int) child.getProperty ("macro", -1); m.channel = (int) child.getProperty ("channel", -1);
+        m.routeUid = child["routeUid"].toString().substring (0, 64);
+        if (m.routeUid.isEmpty() || std::any_of (macroMappings.begin(), macroMappings.end(), [&] (const auto& route) { return route.routeUid == m.routeUid; })) m.routeUid = juce::Uuid().toString();
         m.sourceUid = child["source"].toString();
         m.uid = child["uid"].toString(); const auto parameter = child["parameter"].toString();
         if (parameter.isEmpty() || parameter.length() > 128) continue;
         m.parameter = juce::Identifier (parameter);
-        if (m.channel > 0 && m.channel != MacroMapping::modulationChannel)
+        if (m.channel >= 0 && m.channel <= 4 && m.uid.isNotEmpty())
         {
             const auto found = ids.find (juce::String (m.channel) + ":" + m.uid);
             if (found == ids.end()) continue;
@@ -224,17 +318,23 @@ void SpectralCrrptProcessor::restoreMacroMappings (const juce::ValueTree& tree, 
             {
                 for (auto& source : modulators) if (source.uid == m.uid) source.setParameterValue (m.parameter, m.centre);
             }
-            else if (m.channel == 0)
+            else if (m.channel == 0 && m.uid.isEmpty())
             {
                 auto* p = apvts.getParameter (m.parameter.toString());
                 p->setValueNotifyingHost (p->convertTo0to1 ((float) m.centre));
             }
-            else for (auto module : rackState.getChildWithName ("ch" + juce::String (m.channel)))
+            else for (auto module : rackState.getChildWithName (m.channel == 0 ? juce::Identifier ("modules") : juce::Identifier ("ch" + juce::String (m.channel))))
                 if (module["uid"].toString() == m.uid) module.setProperty (m.parameter, m.centre, nullptr);
         }
+        m.readResponseCurve (child);
         boundRange (m);
-        if (std::none_of (macroMappings.begin(), macroMappings.end(), [&] (const auto& existing) { return m.sameTarget (existing) && m.sameSource (existing); })) macroMappings.push_back (std::move (m));
+        if (std::none_of (macroMappings.begin(), macroMappings.end(), [&] (const auto& existing) { return m.sameTarget (existing) && m.sameSource (existing); }))
+        { savedOrder.emplace (m.routeUid, tree.indexOf (child)); macroMappings.push_back (std::move (m)); }
     }
+    // Owners must validate first, but the saved UI/history ordering remains
+    // stable. Reordering the MAP children here would invalidate Redo snapshots.
+    std::stable_sort (macroMappings.begin(), macroMappings.end(), [&] (const auto& a, const auto& b)
+        { return savedOrder.at (a.routeUid) < savedOrder.at (b.routeUid); });
 }
 
 scrr::params::ModulationValues SpectralCrrptProcessor::getModulationValues() const noexcept
@@ -296,10 +396,16 @@ void SpectralCrrptProcessor::updateModulator (scrr::params::ModulationSource sou
 void SpectralCrrptProcessor::assignModulator (const juce::String& source, int channel, const juce::String& uid, const juce::Identifier& parameter)
 {
     const juce::ScopedLock lock (stateLock);
-    scrr::params::MacroMapping next; next.sourceUid = source; next.channel = channel; next.uid = uid; next.parameter = parameter;
+    scrr::params::MacroMapping next; next.routeUid = juce::Uuid().toString(); next.sourceUid = source; next.channel = channel; next.uid = uid; next.parameter = parameter;
     if (! describeMacroTarget (next) || macroMappings.size() >= 256) return;
     for (const auto& m : macroMappings) if (m.sameTarget (next) && m.sameSource (next)) return;
     recordUndoState();
     next.centre = macroBase (next); next.setDepth (next.normalise (next.centre) > .8 ? -.2 : .2, false);
     macroMappings.push_back (next); presetDirty.store (true); publishRack (true);
+}
+bool SpectralCrrptProcessor::canAssignModulator (const juce::String& source, int channel, const juce::String& uid, const juce::Identifier& parameter) const
+{
+    const juce::ScopedLock lock (stateLock);
+    MacroMapping candidate; candidate.sourceUid = source; candidate.channel = channel; candidate.uid = uid; candidate.parameter = parameter;
+    return describeMacroTarget (candidate);
 }

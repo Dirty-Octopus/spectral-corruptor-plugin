@@ -94,6 +94,7 @@ public:
     bool moveModulator (const juce::String& uid, int insertionIndex);
     void updateModulator (scrr::params::ModulationSource);
     void assignModulator (const juce::String& source, int channel, const juce::String& uid, const juce::Identifier& parameter);
+    bool canAssignModulator (const juce::String& source, int channel, const juce::String& uid, const juce::Identifier& parameter) const;
     uint64_t getModulatorRevision() const noexcept { return modulatorRevision.load(); }
     float getModulatorPhase (int index) const noexcept { return modulationEngine.phase (index); }
 
@@ -134,7 +135,7 @@ private:
     double macroBase (const scrr::params::MacroMapping&) const;
     bool describeMacroTarget (scrr::params::MacroMapping&) const;
     void restoreMacroMappings (const juce::ValueTree&, const std::map<juce::String, juce::String>&);
-    struct RackSnapshot { std::array<juce::ValueTree, 5> chains; std::vector<scrr::params::MacroMapping> mappings; std::vector<scrr::params::ModulationSource> sources; };
+    struct RackSnapshot { std::array<juce::ValueTree, 5> chains; std::vector<scrr::params::MacroMapping> mappings; std::vector<scrr::params::ModulationSource> sources; scrr::dsp::SpectralProcessor::FormulaPrograms formulaPrograms; };
     std::shared_ptr<const RackSnapshot> publishedRack, appliedRack;
     void publishRack (bool structureChanged);
     void consumeRack();

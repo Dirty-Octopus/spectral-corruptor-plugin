@@ -19,6 +19,7 @@ public:
     void prepare (double sampleRate, int numBins) override
     {
         juce::ignoreUnused (sampleRate);
+        auto& scratch = scratchBuffer (ownScratch);
         scratch.resize ((size_t) numBins);
         framePhases.assign (4096, 0.0f);
         phase = 0.0f;
@@ -46,6 +47,7 @@ public:
 
     void processSpectrum (std::complex<float>* spectrum, int numBins, double sampleRate) override
     {
+        auto& scratch = scratchBuffer (ownScratch);
         if (! enabled || depthBins <= 0.0f || numBins <= 3)
             return;
 
@@ -65,8 +67,7 @@ public:
             framePhase = phase;
             framePhases[(size_t) phaseIndex] = framePhase;
 
-            const int fftSize = (numBins - 1) * 2;
-            const int hopSize = juce::jmax (1, fftSize / 4);
+            const int hopSize = getHopSize (numBins);
             const float frameRate = (float) sampleRate / (float) hopSize;
             phase += juce::MathConstants<float>::twoPi * rateHz / juce::jmax (1.0f, frameRate);
             if (phase > juce::MathConstants<float>::twoPi)
@@ -115,7 +116,7 @@ private:
     int currentChannel { 0 };
     int frameCounter { 0 };
     std::vector<float> framePhases;
-    std::vector<std::complex<float>> scratch;
+    std::vector<std::complex<float>> ownScratch;
 };
 
 } // namespace scrr::dsp

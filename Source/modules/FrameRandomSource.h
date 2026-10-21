@@ -34,7 +34,7 @@ public:
     }
 
     uint32_t next (int baseSeed, bool randomEnabled, float rateHz,
-                   int numBins, double sampleRate, uint32_t salt)
+                   int numBins, double sampleRate, uint32_t salt, int actualHopSize = 0)
     {
         if (values.empty())
             prepare();
@@ -46,7 +46,7 @@ public:
         {
             if (currentChannel == 0)
             {
-                const int interval = intervalFrames (rateHz, numBins, sampleRate);
+                const int interval = intervalFrames (rateHz, numBins, sampleRate, actualHopSize);
                 const uint32_t step = (uint32_t) (globalFrame / interval);
                 value = hash32 ((uint32_t) baseSeed ^ salt ^ (step * 0x9e3779b9u));
                 values[(size_t) slot] = value;
@@ -78,10 +78,10 @@ public:
     }
 
 private:
-    static int intervalFrames (float rateHz, int numBins, double sampleRate)
+    static int intervalFrames (float rateHz, int numBins, double sampleRate, int actualHopSize)
     {
         const int fftSize = juce::jmax (2, (numBins - 1) * 2);
-        const int hopSize = juce::jmax (1, fftSize / 4);
+        const int hopSize = actualHopSize > 0 ? actualHopSize : juce::jmax (1, fftSize / 4);
         const float frameRate = (float) sampleRate / (float) hopSize;
         return juce::jmax (1, (int) std::round (frameRate / juce::jmax (0.01f, rateHz)));
     }

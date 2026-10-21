@@ -11,7 +11,8 @@
 
 namespace scrr::dsp {
 
-enum class WindowType { Hann, Hamming, Blackman, Rectangular };
+enum class WindowType { Hann, Hamming, Blackman, Rectangular,
+                        BlackmanHarris, Gaussian, FlatTop, Welch, Triangle };
 
 /**
     Real-time STFT engine using juce::dsp::FFT.
@@ -36,7 +37,7 @@ public:
     FFTEngine();
 
     /** Reconfigure FFT size / hop / window. Call from prepareResources(). */
-    void configure (int fftSize, int hopSize, WindowType window);
+    void configure (int fftSize, int hopSize, WindowType window, bool legacyNormalization = false);
 
     void prepare (double sampleRate, int maxBlockSize, int numChannels);
     void reset();
@@ -54,6 +55,7 @@ public:
     int  getHopSize() const noexcept { return hopSize; }
     int  getNumBins() const noexcept { return fftSize / 2 + 1; }
     double getWindowAmplitudeSum() const noexcept { return windowAmplitudeSum; }
+    const std::vector<float>& getAnalysisWindow() const noexcept { return window; }
 
     /** Copy the most recently analysed magnitude spectrum (linear) into `out`.
         Returns true if a new snapshot was available since the last call; false
@@ -70,6 +72,7 @@ private:
     int fftSize   { 2048 };
     int hopSize   { 512 };
     WindowType windowType { WindowType::Hann };
+    bool useLegacyNormalization {};
 
     std::unique_ptr<juce::dsp::FFT> fft;
 
@@ -88,10 +91,9 @@ private:
     std::array<std::vector<std::complex<float>>, 4> routedSpectra;
     std::vector<ChannelData> channels;
 
-    std::vector<float>               window;
-    float                            windowSum { 1.0f }; // sum of window^2
+    std::vector<float>               window, synthesisWindow;
     double                           windowAmplitudeSum { 1.0 }; // coherent amplitude calibration
-    float                            norm      { 1.0f };  // hop / windowSum
+    float legacyNorm { 1.0f };
 
     std::vector<float>               fftReal;
     std::vector<std::complex<float>> spectrum;

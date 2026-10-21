@@ -17,7 +17,7 @@ public:
         addAndMakeVisible (search);
         close.setButtonText ("CLOSE  x"); close.onClick = [this] { setVisible (false); }; addAndMakeVisible (close);
         viewport.setViewedComponent (&list, false); viewport.setScrollBarsShown (true, false); addAndMakeVisible (viewport);
-        const juce::StringArray names { "HARMONICS", "FREQUENCY", "DESTRUCTION", "PHASE", "TEXTURE / TIME", "FILTER / UTILITY", "GENERIC" };
+        const juce::StringArray names { "HARMONICS", "PARTIAL", "FREQUENCY", "DESTRUCTION", "PHASE", "TEXTURE / TIME", "FILTER / UTILITY", "GENERIC" };
         for (int i = 0; i < names.size(); ++i)
         {
             auto button = std::make_unique<juce::TextButton> (names[i]);

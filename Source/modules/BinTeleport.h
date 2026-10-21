@@ -20,6 +20,7 @@ public:
     void prepare (double sampleRate, int numBins) override
     {
         juce::ignoreUnused (sampleRate);
+        auto& temp = scratchBuffer (ownTemp);
         temp.resize ((size_t) numBins);
 
         frameCounter = 0;
@@ -46,6 +47,7 @@ public:
 
     void processSpectrum (std::complex<float>* spectrum, int numBins, double sampleRate) override
     {
+        auto& temp = scratchBuffer (ownTemp);
         juce::ignoreUnused (sampleRate);
 
         if (! enabled || amount <= 0.0f || numBins <= 2)
@@ -91,7 +93,7 @@ private:
 
     int frameCounter { 0 };
 
-    std::vector<std::complex<float>> temp;
+    std::vector<std::complex<float>> ownTemp;
 };
 
 } // namespace scrr::dsp

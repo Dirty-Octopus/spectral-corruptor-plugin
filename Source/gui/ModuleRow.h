@@ -13,7 +13,22 @@ public:
     { setComponentID ("stage-" + uid); setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
     std::function<void()> choose;
     std::function<void(const juce::MouseEvent&)> contextMenu;
-    bool generic {}, notes {};
+    bool generic {}, notes {}, partial {};
+    void setPartialStatus (bool available, bool soloBypass)
+    {
+        if (partialAvailable != available || partialSoloBypass != soloBypass)
+        { partialAvailable = available; partialSoloBypass = soloBypass; repaint(); }
+    }
+    void setResourceLimited (bool limited)
+    { if (resourceLimited != limited) { resourceLimited = limited; repaint(); } }
+    juce::String getStatusText() const
+    {
+        if (notes) return "NOTES / TEXT";
+        if (enabled && resourceLimited) return "RESOURCE LIMIT";
+        return juce::String (partial ? "PARTIAL / " : generic ? "GENERIC / " : "FFT / ")
+            + (! enabled ? "OFF" : partial && ! partialAvailable ? "SPLIT OFF" : partial && partialSoloBypass ? "SOLO / BYPASS"
+               : "ON");
+    }
     std::function<void(juce::Point<int>, bool, bool)> drag;
     juce::String uid;
     void tick (float dt)
@@ -24,15 +39,16 @@ public:
     }
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (selected ? (enabled ? Theme::yellow() : Theme::inactive())
-                            : Theme::panel().interpolatedWith (enabled ? Theme::blue() : Theme::line(), hover * .5f));
-        const auto ink = selected ? Theme::black() : enabled ? Theme::white() : Theme::dim();
+        const bool processing = enabled && ! resourceLimited && (! partial || (partialAvailable && ! partialSoloBypass));
+        g.fillAll (selected ? (processing ? Theme::yellow() : Theme::inactive())
+                            : Theme::panel().interpolatedWith (processing ? Theme::blue() : Theme::line(), hover * .5f));
+        const auto ink = selected ? Theme::black() : processing ? Theme::white() : Theme::dim();
         Theme::text (g, juce::String (position + 1).paddedLeft ('0', 2), { 10, 6, 26, 28 }, 18, ink, true);
         Theme::text (g, title, { 42 + (int) (hover * 3), 4, getWidth() - 58, 30 }, 13, ink, true);
-        Theme::text (g, notes ? juce::String ("NOTES / TEXT") : (generic ? "GENERIC / " : "FFT / ") + juce::String (enabled ? "ON" : "OFF"), { 43, 33, 120, 15 }, 9, ink, true);
+        Theme::text (g, getStatusText(), { 43, 33, getWidth() - 65, 15 }, 9, ink, true);
         g.setColour (ink.withAlpha (.6f));
         for (int y = 35; y < 45; y += 4) g.fillRect (getWidth() - 24, y, 11, 1);
-        if (selected) { g.setColour (enabled ? Theme::red() : Theme::line()); g.fillRect (0, 0, 4, getHeight() - 2); }
+        if (selected) { g.setColour (processing ? Theme::red() : Theme::line()); g.fillRect (0, 0, 4, getHeight() - 2); }
         g.setColour (Theme::black()); g.fillRect (0, getHeight() - 2, getWidth(), 2);
     }
     void mouseDown (const juce::MouseEvent& e) override { dragging = false; popup = e.mods.isPopupMenu(); if (popup && contextMenu) contextMenu (e); }
@@ -45,6 +61,8 @@ public:
     void mouseUp (const juce::MouseEvent& e) override
     { if (popup) return; if (dragging) { if (drag) drag (e.getScreenPosition(), true, duplicateModifier (e.mods)); } else if (choose) choose(); dragging = false; }
 private:
-    juce::String title; int position; bool enabled, selected, dragging {}, popup {}; float hover {};
+    juce::String title; int position;
+    bool enabled, selected, dragging {}, popup {}, partialAvailable { true }, resourceLimited {}, partialSoloBypass {};
+    float hover {};
 };
 } // namespace scrr::gui

@@ -7,11 +7,13 @@
 #include "dsp/DryWetMixer.h"
 #include "dsp/FFTEngine.h"
 #include "dsp/Oversampler.h"
+#include "dsp/SpectralResourceBudget.h"
 #include "modules/ModuleInstance.h"
 #include "modules/ModuleSpecs.h"
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <vector>
 
 static bool isFiniteBuffer (const juce::AudioBuffer<float>& buffer)
@@ -24,6 +26,97 @@ static bool isFiniteBuffer (const juce::AudioBuffer<float>& buffer)
                 return false;
     }
     return true;
+}
+
+TEST_CASE ("Shared spectral scratch preserves independent clone histories and stereo phases")
+{
+    using namespace scrr::dsp;
+    constexpr int bins = 513, hop = 137;
+    constexpr double rate = 48000;
+    const char* types[] { "BinShuffle", "RandomBinDeath", "BinTeleport", "SpectralPixelation",
+        "FrequencyWarp", "FrequencyDrift", "FrequencyRemap", "FrequencyShift", "HarmonicMatch",
+        "SpectralMirror", "SpectralBloom", "MagnitudePhaseSwap" };
+    for (const auto* type : types)
+    {
+        SpectralScratchWorkspace workspace;
+        std::array<std::unique_ptr<SpectralModule>, 2> privateModules, sharedModules;
+        for (size_t i = 0; i < 2; ++i)
+        {
+            privateModules[i] = createModule (type); sharedModules[i] = createModule (type);
+            REQUIRE (privateModules[i] != nullptr); REQUIRE (sharedModules[i] != nullptr);
+            sharedModules[i]->setSharedScratchWorkspace (&workspace);
+            juce::ValueTree state ("module");
+            state.setProperty ("enabled", true, nullptr);
+            state.setProperty ("amount", juce::String (type) == "BinShuffle" ? .74 : 74.0, nullptr);
+            state.setProperty ("seed", 17 + (int) i, nullptr);
+            state.setProperty ("shift", 171.0 - 200.0 * (double) i, nullptr);
+            state.setProperty ("rate", 2.7 + (double) i, nullptr);
+            state.setProperty ("depth", 5, nullptr);
+            state.setProperty ("track", false, nullptr);
+            state.setProperty ("fundamental", 700, nullptr);
+            state.setProperty ("shape", 1, nullptr);
+            state.setProperty ("blockSize", 8, nullptr);
+            state.setProperty ("pivot", 3000, nullptr);
+            state.setProperty ("spread", 500, nullptr);
+            scrr::params::TransferCurve curve;
+            curve.points = { { 0, .15f + .1f * (float) i, 0 }, { 1, 1, 0 } };
+            state.setProperty ("remapCurve", curve.encode(), nullptr);
+            for (auto* module : { privateModules[i].get(), sharedModules[i].get() })
+            {
+                module->prepare (rate, bins); module->setHopSize (hop); module->updateParameters (state);
+            }
+        }
+
+        std::vector<std::complex<float>> reference (bins), shared (bins);
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            for (size_t i = 0; i < 2; ++i)
+            {
+                privateModules[i]->beginChannel (channel); sharedModules[i]->beginChannel (channel);
+            }
+            for (int frame = 0; frame < 24; ++frame)
+                for (size_t i = 0; i < 2; ++i)
+                {
+                    for (int b = 0; b < bins; ++b)
+                        reference[(size_t) b] = std::polar (.1f + .8f * std::abs (std::sin ((float) b * .27f + (float) i)),
+                            (float) b * .31f + (float) frame * (.19f + .03f * (float) i) + (float) channel * .73f);
+                    shared = reference;
+                    privateModules[i]->processSpectrum (reference.data(), bins, rate);
+                    sharedModules[i]->processSpectrum (shared.data(), bins, rate);
+                    float maximumError = 0;
+                    for (int b = 0; b < bins; ++b)
+                        maximumError = std::max (maximumError, std::abs (reference[(size_t) b] - shared[(size_t) b]));
+                    CHECK (std::isfinite (maximumError));
+                    CHECK (maximumError < 1.0e-6f);
+                }
+        }
+    }
+}
+
+TEST_CASE ("Clone budget admits every audited spectral factory type and refuses unknown types")
+{
+    using namespace scrr::dsp;
+    constexpr auto refused = std::numeric_limits<size_t>::max();
+    for (const auto& spec : getModuleSpecs())
+    {
+        auto module = createModule (spec.typeId);
+        if (module == nullptr || isPartialEffect (spec.typeId)) continue;
+        CHECK (estimateOriginalModuleBytes (spec.typeId, 65537, 384000) < refused);
+        if (module->isTimeDomain()) continue;
+        const auto full = estimateSpectralCloneBytes (spec.typeId, 65537);
+        const auto shared = estimateSpectralCloneBytes (spec.typeId, 65537, true);
+        const auto workspace = estimateSpectralWorkspaceBytes (spec.typeId, 65537);
+        CHECK (full < refused);
+        CHECK (shared <= full);
+        CHECK (shared + workspace >= full);
+    }
+    CHECK (estimateSpectralCloneBytes ("UnreviewedFutureEffect", 1025) == refused);
+    CHECK (estimateSpectralCloneBytes ("FrequencyRemap", -1) == refused);
+    CHECK (estimateOriginalModuleBytes ("Delay", 1025, std::numeric_limits<double>::infinity()) == refused);
+    // Histories cannot be shared; Remap saves only its complex output scratch.
+    CHECK (estimateSpectralCloneBytes ("SpectralDispersion", 65537, true)
+           == estimateSpectralCloneBytes ("SpectralDispersion", 65537));
+    CHECK (estimateSpectralCloneBytes ("FrequencyRemap", 65537, true) > (size_t) 34 * 65537);
 }
 
 TEST_CASE ("GainStage does not produce NaN or Inf")
@@ -168,6 +261,82 @@ TEST_CASE ("FFTEngine impulse latency matches PROJECT.md")
     REQUIRE (std::fabs (output.getSample (0, firstNonZero) - 1.0f) < 5.0e-3f);
 }
 
+TEST_CASE ("Every FFT window reconstructs unity gain for integer and nondivisor hops")
+{
+    using namespace scrr::dsp;
+    for (const int size : { 128, 1024, 4096 })
+        for (int window = 0; window <= (int) WindowType::Triangle; ++window)
+            for (int factor = 2; factor <= 16; ++factor)
+            {
+                const int hop = juce::jmax (1, (int) std::round ((double) size / factor));
+                FFTEngine fft;
+                fft.configure (size, hop, (WindowType) window);
+                fft.prepare (48000, 257, 1);
+                REQUIRE (fft.getHopSize() == hop);
+                REQUIRE (fft.getAnalysisWindow().size() == (size_t) size);
+                REQUIRE (fft.getWindowAmplitudeSum() > 0);
+                std::vector<float> input ((size_t) size * 6 + 257), output (input.size());
+                juce::Random random (173);
+                for (auto& sample : input) sample = (random.nextFloat() - .5f) * .6f + .1f;
+                for (size_t offset = 0; offset < input.size();)
+                {
+                    const int count = std::min (257, (int) (input.size() - offset));
+                    fft.process (input.data() + offset, output.data() + offset, count, 0, {});
+                    offset += (size_t) count;
+                }
+                // The causal engine fades in until its first full overlap history.
+                float error = 0;
+                for (size_t i = (size_t) size * 2; i < output.size(); ++i)
+                {
+                    REQUIRE (std::isfinite (output[i]));
+                    error = std::max (error, std::abs (output[i] - input[i - (size_t) fft.getLatencySamples()]));
+                }
+                if (error >= 3.0e-5f) std::cerr << "FFT=" << size << " window=" << window << " factor=" << factor << " error=" << error << '\n';
+                CHECK (error < 3.0e-5f);
+            }
+}
+
+TEST_CASE ("FFT configuration rejects invalid or uncovered window hops")
+{
+    using namespace scrr::dsp;
+    FFTEngine fft;
+    auto rejects = [&] (int size, int hop)
+    {
+        try { fft.configure (size, hop, WindowType::Hann); }
+        catch (const std::invalid_argument&) { return true; }
+        return false;
+    };
+    CHECK (rejects (200, 50));
+    CHECK (rejects (128, 0));
+    CHECK (rejects (128, 129));
+    CHECK (rejects (128, 128));
+    fft.configure (128, 128, WindowType::Rectangular);
+    CHECK (fft.getHopSize() == 128);
+}
+
+TEST_CASE ("Legacy Blackman normalization retains its historical gain envelope")
+{
+    using namespace scrr::dsp;
+    constexpr int size = 1024, hop = 256;
+    FFTEngine fft; fft.configure (size, hop, WindowType::Blackman, true); fft.prepare (48000, 257, 1);
+    std::vector<float> input (size * 5, 1.0f), output (input.size());
+    for (size_t offset = 0; offset < input.size();)
+    {
+        const int count = std::min (257, (int) (input.size() - offset));
+        fft.process (input.data() + offset, output.data() + offset, count, 0, {});
+        offset += (size_t) count;
+    }
+    const auto& window = fft.getAnalysisWindow();
+    float sum = 0; for (float w : window) sum += w * w;
+    for (int i = 2 * size; i < 3 * size; ++i)
+    {
+        float expected = 0;
+        const int position = (i - fft.getLatencySamples()) % hop;
+        for (int n = position; n < size; n += hop) expected += window[(size_t) n] * window[(size_t) n] * hop / sum;
+        CHECK (std::abs (output[(size_t) i] - expected) < 2.0e-6f);
+    }
+}
+
 TEST_CASE ("All modules are transparent when disabled or amount is zero")
 {
     const std::vector<std::complex<float>> original {
@@ -237,7 +406,8 @@ TEST_CASE ("Spectral Clipper calibrates its bin ceiling across FFT sizes and win
 {
     using namespace scrr::dsp;
     for (int size : { 128, 512, 2048, 8192 })
-        for (auto window : { WindowType::Hann, WindowType::Hamming, WindowType::Blackman, WindowType::Rectangular })
+        for (auto window : { WindowType::Hann, WindowType::Hamming, WindowType::Blackman, WindowType::Rectangular,
+                             WindowType::BlackmanHarris, WindowType::Gaussian, WindowType::FlatTop, WindowType::Welch, WindowType::Triangle })
         {
             FFTEngine fft; fft.configure (size, size / 4, window); fft.prepare (48000, size, 1);
             SpectralClipper clipper; clipper.prepare (48000, fft.getNumBins());
@@ -245,19 +415,22 @@ TEST_CASE ("Spectral Clipper calibrates its bin ceiling across FFT sizes and win
             auto state = createDefaultModuleState ("SpectralClipper");
             state.setProperty ("enabled", true, nullptr); state.setProperty ("threshold", -12.0, nullptr);
             clipper.updateParameters (state);
+            // Keep both real-sinusoid lobes well separated for broad/sidelobed
+            // windows; coherent gain does not eliminate negative-frequency leakage.
+            const int toneBin = size / 8;
             std::vector<float> input ((size_t) size * 3), output (input.size());
             for (size_t i = 0; i < input.size(); ++i)
-                input[i] = .8f * (float) std::sin (juce::MathConstants<double>::twoPi * 5 * (double) i / size);
+                input[i] = .8f * (float) std::sin (juce::MathConstants<double>::twoPi * toneBin * (double) i / size);
             int frames = 0;
             auto process = [&] (std::complex<float>* spectrum, int bins, float)
             {
-                const auto original = spectrum[5];
+                const auto original = spectrum[toneBin];
                 const double inputAmplitude = 2 * std::abs (original) / fft.getWindowAmplitudeSum();
                 CHECK (std::abs (inputAmplitude - .8) < .002);
                 clipper.processSpectrum (spectrum, bins, 48000);
-                const double outputAmplitude = 2 * std::abs (spectrum[5]) / fft.getWindowAmplitudeSum();
+                const double outputAmplitude = 2 * std::abs (spectrum[toneBin]) / fft.getWindowAmplitudeSum();
                 CHECK (std::abs (outputAmplitude - std::pow (10.0, -12.0 / 20)) < .00001);
-                CHECK (std::abs (std::arg (spectrum[5] / original)) < .000001f);
+                CHECK (std::abs (std::arg (spectrum[toneBin] / original)) < .000001f);
                 ++frames;
             };
             for (int block = 0; block < 3; ++block)
@@ -367,6 +540,76 @@ TEST_CASE ("Frequency Shift translates an isolated bin by the requested Hz")
     std::vector<std::complex<float>> bins (1025); bins[100] = { 1, 0 };
     fx.processSpectrum (bins.data(), 1025, 48000);
     REQUIRE (std::abs (bins[120]) > .99f); REQUIRE (std::abs (bins[100]) < .001f);
+}
+
+TEST_CASE ("Frequency Shift and Mirror retain requested audio frequencies across hop sizes")
+{
+    using namespace scrr::dsp;
+    constexpr int size = 1024;
+    constexpr double sampleRate = 48000;
+    for (const int hop : { 512, 256, 205, 137, 64 })
+        for (const bool mirror : { false, true })
+        {
+            FFTEngine fft; fft.configure (size, hop, WindowType::Hann); fft.prepare (sampleRate, 257, 1);
+            auto effect = createModule (mirror ? "SpectralMirror" : "FrequencyShift");
+            effect->prepare (sampleRate, size / 2 + 1); effect->setHopSize (hop);
+            auto state = createDefaultModuleState (mirror ? "SpectralMirror" : "FrequencyShift");
+            state.setProperty ("enabled", true, nullptr);
+            state.setProperty ("amount", 100.0, nullptr);
+            state.setProperty ("shift", 4 * sampleRate / size, nullptr);
+            state.setProperty ("pivot", 18 * sampleRate / size, nullptr);
+            effect->updateParameters (state);
+            std::vector<float> input (size * 8), output (input.size());
+            for (size_t i = 0; i < input.size(); ++i)
+                input[i] = .35f * (float) std::sin (juce::MathConstants<double>::twoPi * 16 * (double) i / size);
+            for (size_t offset = 0; offset < input.size();)
+            {
+                const int count = std::min (257, (int) (input.size() - offset));
+                effect->beginChannel (0);
+                fft.process (input.data() + offset, output.data() + offset, count, 0,
+                    [&] (std::complex<float>* x, int bins, float) { effect->processSpectrum (x, bins, sampleRate); });
+                offset += (size_t) count;
+            }
+            float error = 0;
+            for (int i = size * 2; i < (int) output.size(); ++i)
+            {
+                const double angle = juce::MathConstants<double>::twoPi * 20 * (i - fft.getLatencySamples()) / size;
+                const float expected = (mirror ? -.35f : .35f) * (float) std::sin (angle);
+                error = std::max (error, std::abs (output[(size_t) i] - expected));
+            }
+            if (error >= 5.0e-4f) std::cerr << "hop=" << hop << " mirror=" << mirror << " error=" << error << '\n';
+            CHECK (error < 5.0e-4f);
+        }
+}
+
+TEST_CASE ("Bloom oscillator phase and random Hz rates use the actual hop")
+{
+    using namespace scrr::dsp;
+    constexpr int size = 1024, bins = size / 2 + 1;
+    for (const int hop : { 512, 256, 205, 137, 64 })
+    {
+        SpectralBloom bloom; bloom.prepare (48000, bins); bloom.setHopSize (hop);
+        auto state = createDefaultModuleState ("SpectralBloom");
+        state.setProperty ("enabled", true, nullptr); state.setProperty ("amount", 100, nullptr);
+        state.setProperty ("spread", 200, nullptr); bloom.updateParameters (state);
+        std::vector<std::complex<float>> spectrum ((size_t) bins); spectrum[32] = { 1, 0 };
+        bloom.processSpectrum (spectrum.data(), bins, 48000);
+        const auto first = spectrum[30]; REQUIRE (std::abs (first) > .1f);
+        std::fill (spectrum.begin(), spectrum.end(), std::complex<float>()); spectrum[32] = { 1, 0 };
+        bloom.processSpectrum (spectrum.data(), bins, 48000);
+        const auto measured = spectrum[30] / first;
+        const auto expected = std::polar (1.0f, (float) (juce::MathConstants<double>::twoPi * 30 * hop / size));
+        CHECK (std::abs (measured - expected) < 2.0e-5f);
+
+        FrameRandomSource random; random.prepare(); random.beginChannel (0);
+        const auto initial = random.next (17, true, 8, bins, 48000, 391, hop);
+        int elapsed = 0;
+        for (int frame = 1; frame < 200; ++frame)
+            if (random.next (17, true, 8, bins, 48000, 391, hop) != initial)
+            { elapsed = frame * hop; break; }
+        REQUIRE (elapsed > 0);
+        CHECK (std::abs (elapsed - 6000) <= (hop + 1) / 2);
+    }
 }
 
 TEST_CASE ("Harmonic Sculpt independently controls odd and even partials")

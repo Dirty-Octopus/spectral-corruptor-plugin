@@ -13,6 +13,8 @@
 #include "SpectralPixelation.h"
 #include "SpectralJPEG.h"
 #include "FrequencyWarp.h"
+#include "FrequencyRemap.h"
+#include "PartialEffect.h"
 #include "FrequencyDrift.h"
 #include "PhaseCorruption.h"
 #include "PhaseNoise.h"
@@ -36,12 +38,14 @@ namespace scrr::dsp {
 inline std::unique_ptr<SpectralModule> createModule (const juce::String& typeId)
 {
     if (typeId == "Notes") return nullptr; // Preset documentation has no DSP instance.
+    if (isPartialEffect (typeId) && findModuleSpec (typeId) != nullptr) return std::make_unique<PartialEffectModule> (typeId);
     if (typeId == "BinShuffle")          return std::make_unique<BinShuffle>();
     if (typeId == "RandomBinDeath")      return std::make_unique<RandomBinDeathModule>();
     if (typeId == "SpectralDropout")     return std::make_unique<SpectralDropoutModule>();
     if (typeId == "BinTeleport")         return std::make_unique<BinTeleportModule>();
     if (typeId == "SpectralPixelation")  return std::make_unique<SpectralPixelationModule>();
     if (typeId == "SpectralJPEG")        return std::make_unique<SpectralJPEGModule>();
+    if (typeId == "FrequencyRemap")      return std::make_unique<FrequencyRemapModule>();
     if (typeId == "FrequencyWarp")       return std::make_unique<FrequencyWarpModule>();
     if (typeId == "FrequencyDrift")      return std::make_unique<FrequencyDriftModule>();
     if (typeId == "PhaseCorruption")     return std::make_unique<PhaseCorruptionModule>();

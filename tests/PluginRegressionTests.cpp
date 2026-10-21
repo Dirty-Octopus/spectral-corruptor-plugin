@@ -1144,7 +1144,8 @@ TEST_CASE ("LFO custom points and hollow curvature handles edit and persist with
     curve.mouseDoubleClick (mouse (curve, { 208, 168 })); REQUIRE (curve.source.points.size() == 3);
     curve.mouseDoubleClick (mouse (curve, { 208, 168 })); REQUIRE (curve.source.points.size() == 2);
     curve.mouseDoubleClick (mouse (curve, { 208, 168 }));
-    curve.mouseDown (mouse (curve, { 208, 168 }, false, juce::ModifierKeys::rightButtonModifier)); REQUIRE (curve.source.points.size() == 2);
+    curve.mouseDown (mouse (curve, { 208, 168 }, false, juce::ModifierKeys::rightButtonModifier)); REQUIRE (curve.source.points.size() == 3);
+    curve.mouseDoubleClick (mouse (curve, { 208, 168 })); REQUIRE (curve.source.points.size() == 2);
     // Linear midpoint is (208, 108). Drag its hollow handle upwards.
     curve.mouseDown (mouse (curve, { 208, 108 })); curve.mouseDrag (mouse (curve, { 208, 48 }, true)); curve.mouseUp (mouse (curve, { 208, 48 }));
     REQUIRE (curve.source.points[0].curve > .39f); REQUIRE (curve.source.valueAt (.5) > .85f);
@@ -1823,6 +1824,13 @@ TEST_CASE ("Notes is a single editable Markdown area with preview, independent o
 #include "ModulationUxTests.h"
 #include "SettingsUpdateTests.h"
 #include "EffectArtworkMotionTests.h"
+#include "MappingCurveTests.h"
+#include "SpectralUpgradeTests.h"
+#include "SpectralUpgradeUiTests.h"
+#include "RemapFormulaUiTests.h"
+#include "CurveCoordinateUiTests.h"
+#include "CurveCoordinateTests.h"
+#include "FormulaRoutingTests.h"
 
 int main (int argc, char** argv)
 {
@@ -1836,6 +1844,8 @@ int main (int argc, char** argv)
     scrr::gui::PromptLanguage::set (scrr::gui::PromptLanguage::Language::english, false);
     if (argc > 2 && juce::String (argv[1]) == "--render-v020") return renderV020Ui (juce::File (argv[2]));
     if (argc > 2 && juce::String (argv[1]) == "--render-effect-motion") return renderEffectMotion (juce::File (argv[2]));
+    if (argc > 2 && juce::String (argv[1]) == "--render-spectral-upgrade") return renderSpectralUpgradeUi (juce::File (argv[2]));
+    if (argc > 2 && juce::String (argv[1]) == "--render-remap-formula") return renderRemapFormulaUi (juce::File (argv[2]));
     if (argc > 2 && juce::String (argv[1]) == "--validate-vst3")
     {
         juce::AudioPluginFormatManager formats; formats.addDefaultFormats();
@@ -1850,11 +1860,16 @@ int main (int argc, char** argv)
             juce::String error;
             auto instance = formats.createPluginInstance (*descriptions[0], 48000, 128, error);
             if (! instance) { std::cerr << error << '\n'; return 1; }
-            int macros = 0;
+            int macros = 0, newEngineParameters = 0;
             for (auto* parameter : instance->getParameters())
+            {
                 if (parameter->getName (64).startsWith ("Macro "))
                 { if (! parameter->isAutomatable()) return 1; ++macros; parameter->setValueNotifyingHost (.37f); }
+                if (parameter->getName (64) == "Window Extended" || parameter->getName (64) == "Overlap Factor")
+                { if (! parameter->isAutomatable()) return 1; ++newEngineParameters; parameter->setValueNotifyingHost (.73f); }
+            }
             if (macros != 8) { std::cerr << "Expected 8 host-automatable macros\n"; return 1; }
+            if (newEngineParameters != 2) { std::cerr << "Expected Window Extended and Overlap Factor host parameters\n"; return 1; }
             if (instance->getBusCount (true) != 2 || instance->getBus (true, 1)->getName() != "Sidechain")
             { std::cerr << "Expected external Sidechain input bus\n"; return 1; }
             auto layout = instance->getBusesLayout();
@@ -2034,6 +2049,13 @@ int main (int argc, char** argv)
         scrr::gui::UiScale::set (originalScale); pump (200);
         dynamic_cast<juce::Button*> (findID (*editor, "license-status"))->triggerClick(); pump (100); capture ("activation-chinese");
         return 0;
+    }
+    if (argc > 2 && juce::String (argv[1]) == "--test-filter")
+    {
+        auto& cases = doctest::registry(); const juce::String filter (argv[2]);
+        cases.erase (std::remove_if (cases.begin(), cases.end(), [&] (const auto& test)
+            { return ! juce::String (test.name).containsIgnoreCase (filter); }), cases.end());
+        if (cases.empty()) { std::cerr << "No regression tests match the filter\n"; return 2; }
     }
     return doctest::runTests();
 }

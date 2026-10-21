@@ -7,24 +7,37 @@
 #include <vector>
 #include <cmath>
 #include <cstdint>
+#include "TransferCurve.h"
 
 namespace scrr::params {
 inline constexpr int maxModulators = 128;
 inline constexpr int modulationValueCount = 8 + maxModulators;
 using ModulationValues = std::array<float, modulationValueCount>;
-struct CurvePoint { float x {}, y {}, curve {}; };
+using CurvePoint = TransferCurve::Point;
 struct ModulationSource
 {
     juce::String uid, name;
     bool envelope {}, random {}, enabled { true }, sync {}, retrigger {};
     int shape {}, division { 4 }, input {}, seed { 1 };
     float rate { 1 }, phase {}, gain {}, attack { 10 }, release { 150 }, smooth {};
-    std::vector<CurvePoint> points { { 0, 0 }, { .5f, 1 }, { 1, 0 } };
+    std::vector<CurvePoint> points { { 0, 0, 0, 1 }, { .5f, 1, 0, 2 }, { 1, 0, 0, 3 } };
+    uint32_t nextPointId { 4 };
+    uint32_t allocatePointId() noexcept { return nextPointId < 2147483646 ? nextPointId++ : 0; }
+    bool canMapCoordinate (uint32_t id, bool xAxis) const noexcept
+    {
+        if (envelope || random || shape != 5) return false;
+        for (size_t i = 0; i < points.size(); ++i) if (points[i].id == id)
+            return ! xAxis || (i > 0 && i + 1 < points.size());
+        return false;
+    }
     inline static constexpr std::array<double, 12> beats { 32, 16, 8, 4, 2, 1, .5, .25, .125, .0625, 1.0 / 3, 1.0 / 6 };
     static juce::StringArray divisionNames() { return { "8 bars", "4 bars", "2 bars", "1 bar", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64", "1/8 T", "1/16 T" }; }
     double parameterValue (const juce::Identifier& parameter) const noexcept
     {
         const auto& key = parameter.toString();
+        uint32_t pointId {}; bool xAxis {};
+        if (parseCurveCoordinateParameter (parameter, pointId, xAxis))
+            for (auto point : points) if (point.id == pointId) return xAxis ? point.x : point.y;
         if (key == "rate") return rate;
         if (key == "phase") return phase;
         if (key == "seed") return seed;
@@ -37,6 +50,13 @@ struct ModulationSource
     void setParameterValue (const juce::Identifier& parameter, double value) noexcept
     {
         const auto& key = parameter.toString();
+        uint32_t pointId {}; bool xAxis {};
+        if (parseCurveCoordinateParameter (parameter, pointId, xAxis))
+        {
+            for (auto& point : points) if (point.id == pointId)
+            { (xAxis ? point.x : point.y) = (float) juce::jlimit (0.0, 1.0, std::isfinite (value) ? value : 0); return; }
+            return;
+        }
         if (key == "rate") rate = (float) value;
         else if (key == "phase") phase = (float) value;
         else if (key == "seed") seed = (int) value;
@@ -91,9 +111,10 @@ struct ModulationSource
         tree.setProperty ("enabled", enabled, nullptr); tree.setProperty ("sync", sync, nullptr); tree.setProperty ("retrigger", retrigger, nullptr);
         tree.setProperty ("shape", shape, nullptr); tree.setProperty ("division", division, nullptr); tree.setProperty ("input", input, nullptr);
         tree.setProperty ("rate", rate, nullptr); tree.setProperty ("phase", phase, nullptr); tree.setProperty ("gain", gain, nullptr);
+        tree.setProperty ("nextPointId", (juce::int64) nextPointId, nullptr);
         tree.setProperty ("attack", attack, nullptr); tree.setProperty ("release", release, nullptr);
         for (auto point : points)
-        { juce::ValueTree p ("POINT"); p.setProperty ("x", point.x, nullptr); p.setProperty ("y", point.y, nullptr); p.setProperty ("curve", point.curve, nullptr); tree.appendChild (p, nullptr); }
+        { juce::ValueTree p ("POINT"); p.setProperty ("x", point.x, nullptr); p.setProperty ("y", point.y, nullptr); p.setProperty ("curve", point.curve, nullptr); p.setProperty ("id", (juce::int64) point.id, nullptr); tree.appendChild (p, nullptr); }
         return tree;
     }
     static ModulationSource read (const juce::ValueTree& tree)
@@ -115,12 +136,19 @@ struct ModulationSource
             const float x = (float) p["x"], y = (float) p["y"];
             if (! std::isfinite (x) || ! std::isfinite (y)) continue;
             const float curve = (float) p["curve"];
-            points.push_back ({ juce::jlimit (0.0f, 1.0f, x), juce::jlimit (0.0f, 1.0f, y), std::isfinite (curve) ? juce::jlimit (-1.0f, 1.0f, curve) : 0 });
+            const auto id = (juce::int64) p.getProperty ("id", 0);
+            points.push_back ({ juce::jlimit (0.0f, 1.0f, x), juce::jlimit (0.0f, 1.0f, y), std::isfinite (curve) ? juce::jlimit (-1.0f, 1.0f, curve) : 0,
+                                id > 0 && id < 2147483646 ? (uint32_t) id : 0 });
         }
         std::sort (points.begin(), points.end(), [] (auto a, auto b) { return a.x < b.x; });
         std::vector<CurvePoint> clean;
         for (auto p : points) if (clean.empty() || p.x - clean.back().x >= .001f) clean.push_back (p);
-        if (clean.size() >= 2) { clean.front().x = 0; clean.back().x = 1; m.points = std::move (clean); }
+        if (clean.size() >= 2)
+        {
+            TransferCurve curve; curve.points = std::move (clean);
+            curve.nextPointId = (uint32_t) juce::jlimit ((juce::int64) 1, (juce::int64) 2147483646, (juce::int64) tree.getProperty ("nextPointId", 4));
+            curve.sanitise(); m.points = std::move (curve.points); m.nextPointId = curve.nextPointId;
+        }
         return m;
     }
 };

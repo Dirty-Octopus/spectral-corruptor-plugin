@@ -5,6 +5,7 @@
 #include "EffectCatalog.h"
 #include "../modules/GenericCurves.h"
 #include "../modules/SpectralEqualizer.h"
+#include "../parameters/TransferCurve.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <cmath>
 
@@ -173,6 +174,57 @@ private:
                 const auto p = juce::Point<float> (cx + std::cos (angle) * rx, cy + std::sin (angle) * ry).transformedBy (transform);
                 g.setColour (ink.withAlpha (i == 0 ? 1.0f : .65f)); g.drawLine (cx, cy, p.x, p.y, 1.5f);
                 const float r = i == 0 ? 7.0f : 4.0f; g.fillEllipse (p.x - r, p.y - r, r * 2, r * 2);
+            }
+        }
+        else if (type == "FrequencyRemap")
+        {
+            const auto curve = scrr::params::TransferCurve::decode (values["remapCurve"].toString());
+            const auto plot = art.reduced (13, 15);
+            const auto point = [&] (float t) { return juce::Point<float> (plot.getX() + t * plot.getWidth(), plot.getBottom() - (float) curve.evaluate (t) * plot.getHeight()); };
+            g.setColour (ink.withAlpha (.22f));
+            for (int i = 0; i <= 4; ++i)
+            {
+                const float t = (float) i / 4;
+                g.drawLine (plot.getX() + t * plot.getWidth(), plot.getY(), plot.getX() + t * plot.getWidth(), plot.getBottom(), 1);
+                g.drawLine (plot.getX(), plot.getY() + t * plot.getHeight(), plot.getRight(), plot.getY() + t * plot.getHeight(), 1);
+            }
+            juce::Path path;
+            for (int i = 0; i <= 96; ++i) { const auto p = point ((float) i / 96); if (i == 0) path.startNewSubPath (p); else path.lineTo (p); }
+            g.setColour (ink); g.strokePath (path, juce::PathStrokeType (2.5f));
+            for (int i = 0; i < 3; ++i)
+            {
+                const auto p = point (cycle (3.2f, (float) i / 3));
+                g.setColour (ink.withAlpha (.3f)); g.drawLine (p.x, plot.getBottom(), p.x, p.y, 1.5f); g.drawLine (plot.getX(), p.y, p.x, p.y, 1.5f);
+                g.setColour (ink); g.fillEllipse (p.x - 5, p.y - 5, 10, 10);
+            }
+        }
+        else if (scrr::dsp::isPartialEffect (type))
+        {
+            const auto plot = art.reduced (12, 14);
+            const float movement = .5f + .5f * std::sin (phase * 1.7f), target = .25f + .5f * movement;
+            if (type == "PartialPGrid" || type == "PartialFGrid")
+                for (int i = 0; i <= 6; ++i)
+                {
+                    const float t = type == "PartialPGrid" ? std::log2 (1.0f + (float) i) / std::log2 (7.0f) : (float) i / 6;
+                    g.setColour (ink.withAlpha (.23f)); g.drawLine (plot.getX() + t * plot.getWidth(), plot.getY(), plot.getX() + t * plot.getWidth(), plot.getBottom(), 1);
+                }
+            if (type == "PartialCentroid")
+            { g.setColour (ink.withAlpha (.5f)); g.drawLine (plot.getX() + target * plot.getWidth(), plot.getY(), plot.getX() + target * plot.getWidth(), plot.getBottom(), 2); }
+            for (int i = 0; i < 8; ++i)
+            {
+                const float source = ((float) i + .5f) / 8;
+                float destination = source;
+                if (type == "PartialStretcher") destination = std::pow (source, .55f + movement);
+                else if (type == "PartialStiffString") destination = source * (1 + movement * source * source) / (1 + movement);
+                else if (type == "PartialCentroid") destination = source + (target - source) * (.3f + .55f * movement);
+                else if (type == "PartialPGrid") { const float pitched = std::log2 (1 + source * 6); destination = std::round (pitched * (2 + movement * 3)) / (2 + movement * 3) / std::log2 (7.0f); }
+                else { const float spacing = 3 + movement * 5; destination = std::round (source * spacing) / spacing; }
+                const float x1 = plot.getX() + source * plot.getWidth(), x2 = plot.getX() + juce::jlimit (0.0f, 1.0f, destination) * plot.getWidth();
+                const float height = plot.getHeight() * (.25f + .13f * std::sin (phase * 2.3f - (float) i * .6f));
+                g.setColour (ink.withAlpha (.3f)); g.drawLine (x1, plot.getY() + 4, x2, plot.getBottom() - height, 1.5f);
+                g.setColour (ink); g.fillEllipse (x1 - 2.5f, plot.getY(), 5, 5);
+                g.fillRect (x2 - 2.5f, plot.getBottom() - height, 5.0f, height);
+                g.fillEllipse (x2 - 4, plot.getBottom() - height - 4, 8, 8);
             }
         }
         else if (type == "SpectralMirror")

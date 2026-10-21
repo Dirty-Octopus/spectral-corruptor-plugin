@@ -26,6 +26,7 @@ public:
     void prepare (double sampleRate, int numBins) override
     {
         juce::ignoreUnused (sampleRate);
+        auto& scratch = scratchBuffer (ownScratch);
         scratch.resize ((size_t) numBins);
     }
 
@@ -39,6 +40,7 @@ public:
 
     void processSpectrum (std::complex<float>* spectrum, int numBins, double sampleRate) override
     {
+        auto& scratch = scratchBuffer (ownScratch);
         juce::ignoreUnused (sampleRate);
 
         if (! enabled || amount <= 0.0f || numBins <= 2)
@@ -81,7 +83,7 @@ private:
     bool enabled { false };
     float amount { 0.0f };
     int blockSizeSetting { 64 };
-    std::vector<std::complex<float>> scratch;
+    std::vector<std::complex<float>> ownScratch;
 };
 
 } // namespace scrr::dsp

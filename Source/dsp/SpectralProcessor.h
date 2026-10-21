@@ -7,6 +7,10 @@
 #include "Oversampler.h"
 #include "DryWetMixer.h"
 #include "GainStage.h"
+#include "PartialProcessor.h"
+#include "FrequencySplit.h"
+#include "RemapFormulaRuntime.h"
+#include "../parameters/TransferCurve.h"
 #include "modules/SpectralModule.h"
 #include "modules/ModuleInstance.h"
 #include "../parameters/MacroMapping.h"
@@ -24,12 +28,30 @@ class SpectralProcessor
 public:
     SpectralProcessor();
 
+    struct ModuleResourceStatus
+    {
+        bool blocked {};
+        size_t requiredBytes {}, availableBytes {}, budgetBytes {};
+    };
+    ModuleResourceStatus getModuleResourceStatus (int channel, const juce::String& uid) const noexcept;
+    // Engine configuration/testing hook. Set before prepare(), not from audio.
+    void setEffectCacheBudgetBytes (size_t bytes) noexcept { effectCacheBudget = bytes; }
+    size_t getEffectCacheBytes() const noexcept { return displayEffectCacheBytes.load(); }
+    size_t getPartialCloneAllocationCount() const noexcept { return cloneAllocationCount.load(); }
+
     void prepare (const juce::dsp::ProcessSpec& spec);
     void reset();
     void applyPendingReconfigure();
 
     void updateGlobalParameters (juce::AudioProcessorValueTreeState& apvts);
     void updateModuleChain (int channel, const juce::ValueTree& chainState);
+    struct FormulaProgramEntry
+    {
+        juce::String uid, definition;
+        std::shared_ptr<const scrr::params::FormulaProgram> program;
+    };
+    using FormulaPrograms = std::vector<FormulaProgramEntry>;
+    void setFormulaPrograms (const FormulaPrograms&);
     void setMacroMappings (const std::vector<scrr::params::MacroMapping>&);
     void applyMacroValues (const scrr::params::ModulationValues&);
     void applyMacroValues (const scrr::params::MacroValues& values) { scrr::params::ModulationValues all {}; std::copy (values.begin(), values.end(), all.begin()); applyMacroValues (all); }
@@ -39,8 +61,9 @@ public:
     void setTempo (double bpm) noexcept { if (std::isfinite (bpm) && bpm > 0) tempo = bpm; }
 
     int  getLatencySamples() const noexcept;
-    int  getFFTSize()  const noexcept { return fft.getFFTSize(); }
-    int  getNumBins()  const noexcept { return fft.getNumBins(); }
+    int  getFFTSize()  const noexcept { return displayFFTSize.load(); }
+    int  getNumBins()  const noexcept { return displayFFTSize.load() / 2 + 1; }
+    int  getHopSize() const noexcept { return displayHopSize.load(); }
     int  getOversampleFactor() const noexcept { return displayOversample.load(); }
     float getChannelLevel (int channel) const noexcept { return channelLevels[(size_t) juce::jlimit (0, 3, channel)].load(); }
     int getSoloChannel() const noexcept { return soloChannel.load(); }
@@ -56,12 +79,29 @@ private:
     GainStage     inputGain;
     GainStage     outputGain;
 
+    struct ResourceEntry
+    {
+        int channel {};
+        juce::String uid;
+        std::atomic<bool> blocked {};
+        std::atomic<size_t> requiredBytes {}, availableBytes {}, budgetBytes {};
+    };
     struct ModuleSlot
     {
         std::unique_ptr<SpectralModule> module;
+        std::unique_ptr<PartialProcessor> partial;
+        std::shared_ptr<const scrr::params::FormulaProgram> formulaProgram;
+        std::unique_ptr<RemapFormulaRuntime> formulaRuntime;
+        scrr::params::TransferCurve remapBaseCurve, remapEffectiveCurve;
+        // Declared before borrowers so the workspace outlives their destruction.
+        std::unique_ptr<SpectralScratchWorkspace> scratch;
+        std::array<std::unique_ptr<SpectralModule>, 64> sliceModules;
+        std::shared_ptr<ResourceEntry> resource;
         juce::String typeId;
         juce::ValueTree state, baseState;
         bool enabled { true };
+        bool primaryPrepared {}, resourceBlocked {}, parametersDirty { true };
+        size_t ownedBytes {}, primaryBytes {};
         std::vector<scrr::params::MacroMapping> mappings;
     };
 
@@ -86,13 +126,26 @@ private:
     int  numSplits { 16 };
     float crossfadePct { 0.0f };
     std::array<std::vector<float>, 4> splitWeights;
+    std::vector<FrequencySplit::SliceWeights> individualWeights;
+    std::array<int, 64> sliceFirst {}, sliceLast {};
     std::array<std::vector<std::complex<float>>, 4> channelBuffers;
+    std::vector<std::complex<float>> sliceBuffer;
+    std::array<bool, 4> sliceChains {};
+    std::array<std::array<bool, 64>, 65> occupiedSliceMasks {};
+    std::array<bool, 64> plannedSliceMask {};
+    int baseNumSplits { 16 };
+    bool globalParametersReceived {};
+    bool poolFullPreview {};
+    int poolSoloChannel {};
+    bool resourceConfigurationDirty { true };
     bool splitWeightsDirty { true };
 
     int   oversampleFactor { 2 };
     int   fftSize          { 2048 };
     int   hopSize          { 512 };
+    double overlapFactor { 4.0 }, pendingOverlapFactor { 4.0 };
     WindowType windowType  { WindowType::Hann };
+    bool legacyNormalization { true }, pendingLegacyNormalization { true };
     int   pendingOversampleFactor { 2 };
     int   pendingFftSize          { 2048 };
     WindowType pendingWindowType  { WindowType::Hann };
@@ -103,11 +156,27 @@ private:
 
     std::atomic<double> displaySampleRate { 44100.0 };
     std::atomic<int> displayOversample { 2 };
+    std::atomic<int> displayFFTSize { 2048 }, displayHopSize { 512 };
     std::vector<std::complex<float>> moduleDry;
+    double bandPowerCalibration {};
+    size_t effectCacheBudget { 256u * 1024u * 1024u };
+    std::atomic<size_t> displayEffectCacheBytes {}, cloneAllocationCount {};
+    std::shared_ptr<PartialProcessor::Workspace> partialWorkspace;
+    using ResourceEntries = std::vector<std::shared_ptr<ResourceEntry>>;
+    std::shared_ptr<const ResourceEntries> publishedResources;
     void processChain (std::vector<ModuleSlot>&, std::complex<float>*, int, double);
+    void processSlot (ModuleSlot&, SpectralModule&, std::complex<float>*, int, double, PartialProcessor::SliceContext* = nullptr);
+    void processSliceChain (int rack, const std::complex<float>*, std::complex<float>*, int, double, int audioChannel);
+    void syncSliceModules (bool reprepare = false);
+    void configurePartial (ModuleSlot&, bool rebuild);
+    void preparePartial (ModuleSlot&);
+    void publishResourceEntries();
+    void refreshPoolPlan();
+    void rebuildOccupiedSliceMasks();
     double sampleRate { 44100.0 };
     double tempo { 120 };
     int    numChannels { 2 };
+    int    currentAudioChannel {};
     int    maxBlockSize { 512 };
 
     void reconfigure();

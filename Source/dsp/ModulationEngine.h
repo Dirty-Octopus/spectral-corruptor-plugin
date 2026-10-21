@@ -19,7 +19,8 @@ public:
         {
             Runtime r; r.source = r.effective = s;
             for (const auto& m : mappings)
-                if (m.channel == scrr::params::MacroMapping::modulationChannel && m.uid == s.uid && m.sourceUid.isEmpty()) r.mappings.push_back (m);
+                if (m.channel == scrr::params::MacroMapping::modulationChannel && m.uid == s.uid)
+                { r.mappings.push_back (m); r.mappings.back().bindResponseMappings (mappings); }
             for (size_t oldIndex = 0; oldIndex < runtime.size(); ++oldIndex)
             {
                 const auto& old = runtime[oldIndex];
@@ -35,6 +36,19 @@ public:
             next.push_back (std::move (r));
         }
         runtime = std::move (next);
+        processOrder.clear(); std::vector<bool> ready (runtime.size(), false);
+        for (size_t pass = 0; pass < runtime.size(); ++pass)
+            for (size_t i = 0; i < runtime.size(); ++i) if (! ready[i])
+            {
+                bool dependenciesReady = true;
+                const auto check = [&] (const auto& route)
+                { if (route.sourceUid.isNotEmpty() && route.sourceIndex >= 8 && (size_t) (route.sourceIndex - 8) < ready.size() && ! ready[(size_t) route.sourceIndex - 8]) dependenciesReady = false; };
+                for (const auto& route : runtime[i].mappings) { check (route); for (const auto& response : route.responseMappings) check (response); }
+                if (dependenciesReady) { ready[i] = true; processOrder.push_back (i); }
+            }
+        // Malformed external snapshots cannot feed a stale value around a
+        // cycle. The editor rejects these routes before they reach runtime.
+        for (size_t i = 0; i < ready.size(); ++i) if (! ready[i]) { nextOutputs[i] = 0; nextPhases[i] = 0; }
         // These UI-visible values follow the same stable UIDs as runtime state.
         // Capture all old slots before publishing, so moving one cannot overwrite
         // a later source's value. Followers and disabled sources have no phase.
@@ -46,19 +60,33 @@ public:
                   const scrr::params::MacroValues& macros = {})
     {
         bpm = std::isfinite (bpm) ? juce::jlimit (1.0, 1000.0, bpm) : 120;
-        for (size_t index = 0; index < runtime.size(); ++index)
+        scrr::params::ModulationValues values {}; std::copy (macros.begin(), macros.end(), values.begin());
+        for (size_t i = 0; i < runtime.size(); ++i) values[i + 8] = outputs[i].load();
+        for (const auto index : processOrder)
         {
             auto& r = runtime[index]; auto& s = r.effective;
+            std::copy (r.source.points.begin(), r.source.points.end(), s.points.begin());
             for (size_t i = 0; i < r.mappings.size(); ++i)
             {
                 const auto& m = r.mappings[i]; bool already = false;
                 for (size_t j = 0; j < i; ++j) if (r.mappings[j].parameter == m.parameter) { already = true; break; }
                 if (already) continue;
                 double sum = 0;
-                for (const auto& route : r.mappings) if (route.parameter == m.parameter) sum += route.offset (macros[(size_t) route.macro]);
-                s.setParameterValue (m.parameter, m.fromBase (r.source.parameterValue (m.parameter), sum));
+                for (const auto& route : r.mappings)
+                    if (route.parameter == m.parameter && route.sourceEnabled && route.valueIndex() >= 0 && (size_t) route.valueIndex() < values.size())
+                        sum += route.offset (values[(size_t) route.valueIndex()], &values);
+                if (m.coordinatePointId != 0)
+                {
+                    for (size_t point = 0; point < r.source.points.size(); ++point) if (r.source.points[point].id == m.coordinatePointId)
+                    {
+                        const auto base = r.source.points[point];
+                        (m.coordinateXAxis ? s.points[point].x : s.points[point].y) = (float) m.fromBase (m.coordinateXAxis ? base.x : base.y, sum);
+                    }
+                }
+                else s.setParameterValue (m.parameter, m.fromBase (r.source.parameterValue (m.parameter), sum));
             }
-            if (! s.enabled) { outputs[index].store (0); phases[index].store (0); continue; }
+            scrr::params::TransferCurve::constrainCoordinates (s.points.data(), s.points.size(), false, false, r.source.points.data());
+            if (! s.enabled) { outputs[index].store (0); phases[index].store (0); values[index + 8] = 0; continue; }
             float output = 0;
             if (s.envelope)
             {
@@ -102,6 +130,7 @@ public:
                 if (! s.random) r.phase -= std::floor (r.phase);
             }
             outputs[index].store (output);
+            values[index + 8] = output;
         }
         wasPlaying = playing;
     }
@@ -109,6 +138,7 @@ public:
     float phase (int index) const noexcept { return index >= 0 && index < (int) phases.size() ? phases[(size_t) index].load() : 0; }
 private:
     std::vector<Runtime> runtime;
+    std::vector<size_t> processOrder;
     std::array<std::atomic<float>, scrr::params::maxModulators> outputs {}, phases {};
     double sampleRate { 44100 }; bool wasPlaying {};
 };

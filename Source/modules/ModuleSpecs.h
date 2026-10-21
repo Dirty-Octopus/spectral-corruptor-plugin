@@ -14,6 +14,12 @@
 
 namespace scrr::dsp {
 
+inline bool isPartialEffect (const juce::String& type)
+{
+    return type == "PartialStretcher" || type == "PartialStiffString" || type == "PartialCentroid"
+        || type == "PartialPGrid" || type == "PartialFGrid";
+}
+
 inline bool isGenericEffect (const juce::String& type)
 { return type == "Reverb" || type == "Delay" || type == "Compressor" || type == "Distortion" || type == "Utility"; }
 
@@ -98,6 +104,20 @@ inline const std::vector<ModuleSpec>& getModuleSpecs()
     auto add = [s] (const char* id, const char* name, std::vector<ParamSpec> params)
     { ModuleSpec m; m.typeId = id; m.displayName = name; m.params = std::move (params); s->push_back (std::move (m)); };
 
+    auto partialMode = [] { return makeChoice ("mode", "Mode", { "Scale", "Resynth" }, 0); };
+    add ("PartialStretcher", "Stretcher", { partialMode(), makeFloat ("amount", "Stretch", -48, 48, 0, .1f, " st") });
+    add ("PartialStiffString", "Stiff String", { partialMode(), makeFloat ("amount", "Stiffness", 0, 100, 0, .1f, " %") });
+    add ("PartialCentroid", "Centroid", { partialMode(), makeFloat ("amount", "Converge", 0, 100, 0, .1f, " %"), makeFloat ("target", "Target", 20, 20000, 1000, .1f, " Hz", true) });
+    add ("PartialPGrid", "P Grid", { partialMode(), makeFloat ("amount", "Quantize", 0, 100, 0, .1f, " %"), makeFloat ("pitch", "Grid Spacing", .1f, 48, 12, .1f, " st") });
+    add ("PartialFGrid", "F Grid", { partialMode(), makeFloat ("amount", "Quantize", 0, 100, 0, .1f, " %"), makeFloat ("pitch", "Grid Spacing", 1, 4000, 110, .1f, " Hz", true) });
+    for (auto& partial : result)
+    {
+        partial.params.insert (partial.params.begin() + 1, makeChoice ("anchor", "Anchor", { "Band Centre", "Energy Centroid" }, 0));
+        partial.params.insert (partial.params.begin() + 1, makeChoice ("shape", "Shape", { "Sine", "Triangle", "Saw", "Square" }, 0));
+        if (partial.typeId == "PartialStretcher" || partial.typeId == "PartialStiffString"
+            || partial.typeId == "PartialPGrid")
+            partial.params.push_back (makeFloat ("reference", "Reference", 20, 2000, 110, .1f, " Hz", true));
+    }
     add ("BinShuffle", "Bin Shuffle", {
         makeFloat ("amount", "Amount", 0.0f, 1.0f, 0.0f, 0.001f),
         makeInt ("seed", "Seed", 0, 999999, 0),
@@ -122,6 +142,8 @@ inline const std::vector<ModuleSpec>& getModuleSpecs()
         makeFloat ("amount", "Amount", 0.0f, 100.0f, 0.0f, 0.1f, " %"),
         makeInt ("blockSize", "Block Size", 1, 64, 8, " bins"),
     });
+    add ("FrequencyRemap", "Frequency Remap", {
+        makeFloat ("amount", "Remap", 0, 100, 100, .1f, " %") });
     add ("FrequencyWarp", "Frequency Warp", {
         makeFloat ("amount", "Amount", 0.0f, 100.0f, 0.0f, 0.1f, " %"),
         makeFloat ("shape", "Shape", -100.0f, 100.0f, 50.0f, 0.1f),
