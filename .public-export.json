@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_commit": "cff66e4d4fe0545ffed557476a4fa5a84c75a64e",
+  "source_commit": "7f2591304b2b4df949224ff45ddb1b463e4dce67",
   "working_tree_preview": false,
   "juce_commit": "51d11a2be6d5c97ccf12b4e5e827006e19f0555a",
   "files": {
@@ -146,7 +146,7 @@
     "tests/ColourPaletteUiTests.h": "4cc41491b4e3d4ffbd4fa155dd60109cfc8353520f600f6c9369b86b1df4ac59",
     "tests/CurveCoordinateTests.h": "97f1939a2dd775d3a7a674fa328196c76bf15f6feec833dfd62ed29ff3ef5874",
     "tests/CurveCoordinateUiTests.h": "f747873bcc4dc3465a5feb7261fd5595e0e371aeea3211eb99bddf123ad479c1",
-    "tests/CurveGridUiTests.h": "f905a6a15b7bcbb059f8f40e0196779da188707f24fd25386178af7a8d1b62de",
+    "tests/CurveGridUiTests.h": "f1789c29cf430b459624249f2673d96f46c5803ecb582af0cdce8b51431ef687",
     "tests/DspFoundationTests.cpp": "f072b037fc19ce6f9f8fa04d55b189f77be5c45391f6d44a9c81b42e5f63193e",
     "tests/EffectArtworkMotionTests.h": "c2854ef91888aae6a98fc5a6b9d5d967341ad008424ee3168511ffe479f207a7",
     "tests/FormulaPopoutUiTests.h": "3d4729753f1cc491c90a0fe5b71f3ec3dea74e6a590be8838100c2a6178e20aa",

@@ -156,8 +156,11 @@ TEST_CASE ("Grid controls accept every integer count share editor settings and p
     REQUIRE (juce::exactlyEqual (dynamic_cast<juce::Slider*> (findID (second, "curve-grid-y"))->getValue(), 13.0));
     REQUIRE (processor->copyPresetState().isEquivalentTo (sound));
     // The drawing uses precisely the same normalized positions as snapping.
-    juce::Image image (juce::Image::RGB, 103, 103, true); juce::Graphics graphics (image); graphics.setColour (juce::Colours::white);
-    Grid::drawGrid (graphics, { 1, 1, 100, 100 });
+    juce::Image image (juce::Image::RGB, 103, 103, true);
+    {
+        juce::Graphics graphics (image); graphics.setColour (juce::Colours::white);
+        Grid::drawGrid (graphics, { 1, 1, 100, 100 });
+    } // Direct2D commits its backing pixels when the Graphics context closes.
     REQUIRE (image.getPixelAt ((int) (1 + 100.0f * Grid::snap (.42f, 7)), 37) == juce::Colours::white);
     REQUIRE (image.getPixelAt (37, (int) (101 - 100.0f * Grid::snap (.42f, 13))) == juce::Colours::white);
 }
