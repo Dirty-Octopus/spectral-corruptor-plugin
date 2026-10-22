@@ -67,14 +67,37 @@ TEST_CASE ("Formula popout moves one editable workspace and grows its actual gra
         auto* launch = dynamic_cast<juce::Button*> (findID (f.editor, "formula-popout")); REQUIRE (launch != nullptr); launch->onClick();
         REQUIRE (f.editor.isPopoutOpen());
         auto* window = f.editor.getPopoutWindow(); REQUIRE (window != nullptr);
+        // Let AppKit finish applying the initial on-screen frame before taking
+        // a geometry baseline. CI displays can be smaller than the default.
+        pump (40);
         REQUIRE (window->isUsingNativeTitleBar() == (mode == Preference::Mode::native));
         REQUIRE (window->isOnDesktop() == (mode == Preference::Mode::native));
         REQUIRE (window->isDraggable()); REQUIRE (window->isResizable());
         REQUIRE (findID (*window, "formula-canvas") == canvas); REQUIRE (f.editor.getParameterSliders().front() == slider);
         REQUIRE (canvas->getWidth() > inlineSize.getWidth()); REQUIRE (canvas->getHeight() > inlineSize.getHeight());
         REQUIRE (f.state.isEquivalentTo (initial));
-        const int oldHeight = canvas->getHeight(); window->setSize (window->getWidth(), window->getHeight() + 80);
-        REQUIRE (canvas->getHeight() == oldHeight + 80);
+        const int originalWindowHeight = window->getHeight(), originalCanvasHeight = canvas->getHeight();
+        const auto expectResize = [&] (int requestedHeight)
+        {
+            const int beforeWindowHeight = window->getHeight(), beforeCanvasHeight = canvas->getHeight();
+            window->setSize (window->getWidth(), requestedHeight);
+            const bool laidOut = waitForUI ([&]
+            {
+                return window->getHeight() == requestedHeight
+                    && canvas->getHeight() - beforeCanvasHeight == window->getHeight() - beforeWindowHeight;
+            });
+            if (! laidOut)
+                std::cerr << "Formula resize: mode=" << (mode == Preference::Mode::native ? "native" : "contained")
+                          << " requested=" << requestedHeight << " window=" << beforeWindowHeight << "->" << window->getHeight()
+                          << " canvas=" << beforeCanvasHeight << "->" << canvas->getHeight() << '\n';
+            REQUIRE (laidOut); REQUIRE (canvas->getHeight() != beforeCanvasHeight);
+        };
+        // Shrink and restore the known displayed size instead of requiring a
+        // native window to grow beyond the runner's available screen height.
+        expectResize (originalWindowHeight - 80);
+        REQUIRE (canvas->getHeight() == originalCanvasHeight - 80);
+        expectResize (originalWindowHeight);
+        REQUIRE (canvas->getHeight() == originalCanvasHeight);
         slider->setValue (3.25, juce::sendNotificationSync);
         REQUIRE (std::abs ((double) f.state["formulaParam_popout-control"] - 3.25) < 1.0e-12);
         auto* field = dynamic_cast<juce::TextEditor*> (findID (*window, "formula-constant-1")); REQUIRE (field != nullptr);

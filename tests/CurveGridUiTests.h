@@ -81,7 +81,7 @@ TEST_CASE ("Pinned Mapping centre survives nearby point drags and unchanged deco
     drag (graph, position (area, .25f, .2f), position (area, .6f, .7f));
     requireIdsAndSpacing (graph.getCurve().points, { 1, 7, 9, 8, 2 });
     REQUIRE (graph.getCurve().points[1].x < .5f); REQUIRE (graph.getCurve().points[1].y <= .5f);
-    REQUIRE (graph.getCurve().points[2].x == .5f); REQUIRE (graph.getCurve().points[2].y == .5f);
+    REQUIRE (juce::exactlyEqual (graph.getCurve().points[2].x, .5f)); REQUIRE (juce::exactlyEqual (graph.getCurve().points[2].y, .5f));
     drag (graph, position (area, .75f, .8f), position (area, .4f, .2f));
     requireIdsAndSpacing (graph.getCurve().points, { 1, 7, 9, 8, 2 });
     REQUIRE (graph.getCurve().points[3].x > .5f); REQUIRE (graph.getCurve().points[3].y >= .5f); REQUIRE (edits == 2);
@@ -152,8 +152,8 @@ TEST_CASE ("Grid controls accept every integer count share editor settings and p
     REQUIRE (Grid::get().x == 7); REQUIRE (Grid::get().y == 13);
     REQUIRE (Grid::read (Grid::preferenceFile()).x == 7); REQUIRE (Grid::read (Grid::preferenceFile()).y == 13);
     scrr::gui::CurveGridControls second; second.setSize (248, 68);
-    REQUIRE (dynamic_cast<juce::Slider*> (findID (second, "curve-grid-x"))->getValue() == 7);
-    REQUIRE (dynamic_cast<juce::Slider*> (findID (second, "curve-grid-y"))->getValue() == 13);
+    REQUIRE (juce::exactlyEqual (dynamic_cast<juce::Slider*> (findID (second, "curve-grid-x"))->getValue(), 7.0));
+    REQUIRE (juce::exactlyEqual (dynamic_cast<juce::Slider*> (findID (second, "curve-grid-y"))->getValue(), 13.0));
     REQUIRE (processor->copyPresetState().isEquivalentTo (sound));
     // The drawing uses precisely the same normalized positions as snapping.
     juce::Image image (juce::Image::RGB, 103, 103, true); juce::Graphics graphics (image); graphics.setColour (juce::Colours::white);

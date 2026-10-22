@@ -74,15 +74,15 @@ TEST_CASE ("Macro and modulation mapping details expose editable sliders and ret
         REQUIRE (row->getLocalBounds().contains (control->getBounds()));
     }
     auto* start = slider (*row, "map-low"); auto* centre = slider (*row, "map-centre"); auto* end = slider (*row, "map-high");
-    REQUIRE (start->getMinimum() == -100); REQUIRE (end->getMaximum() == 100);
-    REQUIRE (centre->getMinimum() == original.minimum); REQUIRE (centre->getMaximum() == original.maximum);
+    REQUIRE (juce::exactlyEqual (start->getMinimum(), -100.0)); REQUIRE (juce::exactlyEqual (end->getMaximum(), 100.0));
+    REQUIRE (juce::exactlyEqual (centre->getMinimum(), original.minimum)); REQUIRE (juce::exactlyEqual (centre->getMaximum(), original.maximum));
     // A host edit after the row was opened must survive an endpoint gesture.
     p->setModuleParameter (1, uid, "shift", 350.0);
     end->setValue (-37.25, juce::sendNotificationSync); pump();
     REQUIRE (surviving != nullptr); REQUIRE (row->isCurveExpanded());
     auto current = p->getMacroMappings()[0];
     REQUIRE (std::abs (current.centre - 350) < 1.0e-9);
-    REQUIRE (current.startOffset == original.startOffset); REQUIRE (std::abs (current.endOffset + .3725) < 1.0e-12);
+    REQUIRE (juce::exactlyEqual (current.startOffset, original.startOffset)); REQUIRE (std::abs (current.endOffset + .3725) < 1.0e-12);
     REQUIRE (current.mode == original.mode); REQUIRE (current.sameResponseCurve (original));
     for (const auto value : { -20.0, -10.0, 12.34 }) { start->setValue (value, juce::sendNotificationSync); pump(); REQUIRE (surviving != nullptr); }
     REQUIRE (std::abs (p->getMacroMappings()[0].startOffset - .1234) < 1.0e-12);
@@ -130,8 +130,8 @@ TEST_CASE ("Mapping base sliders keep finite logarithmic custom ranges and rejec
     scrr::params::MacroMapping zero; zero.minimum = -5000; zero.maximum = 5000; zero.step = .1f; zero.centre = 0;
     scrr::gui::MacroMappingRow zeroRow (zero);
     auto* zeroSlider = slider (zeroRow, "map-centre"); REQUIRE (zeroSlider != nullptr);
-    REQUIRE (zeroSlider->getTextFromValue (zeroSlider->getValue()).getDoubleValue() == 0);
-    REQUIRE (valueLabel (*zeroSlider)->getText().getDoubleValue() == 0);
+    REQUIRE (juce::exactlyEqual (zeroSlider->getTextFromValue (zeroSlider->getValue()).getDoubleValue(), 0.0));
+    REQUIRE (juce::exactlyEqual (valueLabel (*zeroSlider)->getText().getDoubleValue(), 0.0));
     scrr::params::MacroMapping mapping; mapping.minimum = 1.0e-200; mapping.maximum = 1.0e200;
     mapping.centre = 1; mapping.logarithmic = true; mapping.step = 0;
     scrr::gui::MacroMappingRow row (mapping); row.setSize (700, row.preferredHeight());
@@ -139,10 +139,10 @@ TEST_CASE ("Mapping base sliders keep finite logarithmic custom ranges and rejec
     REQUIRE (std::isfinite (centre->proportionOfLengthToValue (.5)));
     REQUIRE (std::abs (centre->proportionOfLengthToValue (.5) - 1) < 1.0e-10);
     REQUIRE (std::abs (centre->valueToProportionOfLength (1) - .5) < 1.0e-12);
-    REQUIRE (centre->getValueFromText ("nan") == centre->getValue());
-    REQUIRE (centre->getValueFromText ("3oops") == centre->getValue());
-    REQUIRE (centre->getValueFromText ("2.5e100") == 2.5e100);
+    REQUIRE (juce::exactlyEqual (centre->getValueFromText ("nan"), centre->getValue()));
+    REQUIRE (juce::exactlyEqual (centre->getValueFromText ("3oops"), centre->getValue()));
+    REQUIRE (juce::exactlyEqual (centre->getValueFromText ("2.5e100"), 2.5e100));
     int edits = 0; row.change = [&] (auto changed, bool remove, bool responseOnly, int control)
-    { REQUIRE (! remove); REQUIRE (! responseOnly); REQUIRE (control == 2); REQUIRE (changed.centre == mapping.centre); ++edits; };
+    { REQUIRE (! remove); REQUIRE (! responseOnly); REQUIRE (control == 2); REQUIRE (juce::exactlyEqual (changed.centre, mapping.centre)); ++edits; };
     slider (row, "map-high")->setValue (25, juce::sendNotificationSync); REQUIRE (edits == 1);
 }
