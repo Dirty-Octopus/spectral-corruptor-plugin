@@ -396,19 +396,37 @@ TEST_CASE ("Quick Guide repeats until suppressed and Settings can re-enable its 
     auto open = [&]
     {
         auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditor());
-        editor->addToDesktop (0); editor->setVisible (true); pump (90); return editor;
+        editor->addToDesktop (0); editor->setVisible (true);
+        REQUIRE (waitForUI ([&] { return editor->isShowing(); }));
+        return editor;
     };
-    auto editor = open(); auto* guide = findID (*editor, "quick-guide"); REQUIRE (guide && guide->isVisible());
-    findButton (*guide, "GOT IT")->triggerClick(); pump (30); REQUIRE (! guide->isVisible()); REQUIRE (scrr::gui::QuickGuide::shouldShow());
-    editor.reset(); editor = open(); guide = findID (*editor, "quick-guide"); REQUIRE (guide && guide->isVisible());
+    auto editor = open(); auto* guide = findID (*editor, "quick-guide"); REQUIRE (guide);
+    REQUIRE (waitForUI ([&] { return guide->isVisible(); }));
+    findButton (*guide, "GOT IT")->triggerClick();
+    REQUIRE (waitForUI ([&] { return ! guide->isVisible(); })); REQUIRE (scrr::gui::QuickGuide::shouldShow());
+    editor.reset(); editor = open(); guide = findID (*editor, "quick-guide"); REQUIRE (guide);
+    REQUIRE (waitForUI ([&] { return guide->isVisible(); }));
     auto* never = findButton (*guide, "Do not show again"); REQUIRE (never);
-    never->setToggleState (true, juce::dontSendNotification); findButton (*guide, "GOT IT")->triggerClick(); pump (30);
+    never->setToggleState (true, juce::dontSendNotification); findButton (*guide, "GOT IT")->triggerClick();
+    REQUIRE (waitForUI ([&] { return ! guide->isVisible(); }));
     REQUIRE (! scrr::gui::QuickGuide::shouldShow());
-    editor.reset(); editor = open(); guide = findID (*editor, "quick-guide"); REQUIRE (guide && ! guide->isVisible());
-    dynamic_cast<juce::Button*> (findID (*editor, "settings-button"))->triggerClick(); pump (30);
-    dynamic_cast<juce::Button*> (findID (*editor, "open-quick-guide"))->triggerClick(); pump (30); REQUIRE (guide->isVisible());
+    editor.reset(); editor = open(); guide = findID (*editor, "quick-guide"); REQUIRE (guide);
+    // The guide starts hidden before its startup timer runs. Give the visible
+    // editor's 30 Hz timer a real dispatch window before checking suppression.
+    auto startupDispatched = std::make_shared<bool> (false);
+    juce::Timer::callAfterDelay (120, [startupDispatched] { *startupDispatched = true; });
+    REQUIRE (waitForUI ([&] { return *startupDispatched; }));
+    REQUIRE (! guide->isVisible());
+    auto* settingsButton = dynamic_cast<juce::Button*> (findID (*editor, "settings-button")); REQUIRE (settingsButton);
+    settingsButton->triggerClick();
+    auto* settings = findID (*editor, "settings-panel"); REQUIRE (settings);
+    REQUIRE (waitForUI ([&] { return settings->isVisible(); }));
+    auto* openGuide = dynamic_cast<juce::Button*> (findID (*editor, "open-quick-guide")); REQUIRE (openGuide);
+    openGuide->triggerClick(); REQUIRE (waitForUI ([&] { return guide->isVisible(); }));
     never = findButton (*guide, "Do not show again"); REQUIRE (never && never->getToggleState());
-    never->setToggleState (false, juce::dontSendNotification); findButton (*guide, "GOT IT")->triggerClick(); pump (30);
+    never->setToggleState (false, juce::dontSendNotification); findButton (*guide, "GOT IT")->triggerClick();
+    REQUIRE (waitForUI ([&] { return ! guide->isVisible(); }));
     REQUIRE (scrr::gui::QuickGuide::shouldShow());
-    editor.reset(); editor = open(); guide = findID (*editor, "quick-guide"); REQUIRE (guide && guide->isVisible());
+    editor.reset(); editor = open(); guide = findID (*editor, "quick-guide"); REQUIRE (guide);
+    REQUIRE (waitForUI ([&] { return guide->isVisible(); }));
 }

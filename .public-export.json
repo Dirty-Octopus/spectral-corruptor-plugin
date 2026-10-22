@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_commit": "a9a030f0736892c6f381037c99515aed162016cc",
+  "source_commit": "cff66e4d4fe0545ffed557476a4fa5a84c75a64e",
   "working_tree_preview": false,
   "juce_commit": "51d11a2be6d5c97ccf12b4e5e827006e19f0555a",
   "files": {
@@ -154,7 +154,7 @@
     "tests/FrequencyRemapTests.cpp": "77a13cc1afb197fd6913f606db6d0af98e3c676b54392437bf7bf2b9dde60c6c",
     "tests/MappingCurveTests.h": "631c0418274609531b7753098e9faa246fa04ea15a891cc9cf3d2adc19740ee9",
     "tests/MappingDetailsUiTests.h": "f7ad17774edbb5791e227895e17477a5f262433457ac54977d5fd6d13264db2d",
-    "tests/ModulationUxTests.h": "08e0f366a3ac80e50c7e7f7c7a1f34c22a6f950dd5eca240edede0da569e1362",
+    "tests/ModulationUxTests.h": "cd5859f75841eeafae8a3c11c384dbb2ac9b0426d6fed89e4ffa727156114430",
     "tests/PartialProcessorTests.cpp": "6231c8afd40a25a1beff39070c4399bcd04668864e35abc313c9581d5ea6d2dd",
     "tests/PluginRegressionTests.cpp": "3dab6eb0e071ca494d9748b96d373e1de8643c678df46d6f22e5beac65217f47",
     "tests/PresetRecoveryTests.h": "f7180f93e2142db8d9893ca94d642bc3c1528b85ee5a81d179743a8f42fc5b74",
