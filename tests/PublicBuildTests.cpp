@@ -11,7 +11,10 @@ TEST_CASE ("The source placeholder never activates or opens the input signal pat
     REQUIRE (! license->isActivated());
     REQUIRE (license->validate ("anything").failed());
     REQUIRE (license->activate ("anything").failed());
+    REQUIRE (license->activate ("DEMO").failed());
     REQUIRE (! license->isActivated());
+    REQUIRE (! license->canProcessRealtime()); REQUIRE (! license->isDemoActive());
+    REQUIRE (license->demoRemainingSeconds() == 0);
     REQUIRE (scrr::licensing::LicenseManager::defaultFile() == juce::File());
     REQUIRE (scrr::factoryPresets::getEntries().isEmpty());
     SpectralCrrptProcessor signal, silence;
@@ -22,6 +25,7 @@ TEST_CASE ("The source placeholder never activates or opens the input signal pat
     double power = 0;
     for (int block = 0; block < 100; ++block)
     {
+        signal.setNonRealtime (block % 3 == 0); silence.setNonRealtime (block % 3 == 0);
         for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < 257; ++i) a.setSample (ch, i, .75f);
         b.clear();
         if (block % 2 == 0) signal.processBlock (a, midi); else signal.processBlockBypassed (a, midi);

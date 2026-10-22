@@ -147,6 +147,8 @@ TEST_CASE ("Mapping page response edits reach the processor without destroying t
     auto p = testProcessor(); p->addModule (1, "FrequencyShift");
     const auto uid = p->getModuleChain (1).getChild (0)["uid"].toString(); p->assignMacro (0, 1, uid, "shift");
     scrr::gui::MacroMappingPanel panel (*p); panel.setSize (800, 520); panel.showMacro (0);
+    auto* disclosure = dynamic_cast<juce::Button*> (findID (panel, "map-curve-disclosure")); REQUIRE (disclosure != nullptr);
+    disclosure->triggerClick(); pump();
     auto* editor = dynamic_cast<scrr::gui::TransferCurveEditor*> (findID (panel, "map-response-curve")); REQUIRE (editor != nullptr);
     juce::Component::SafePointer<scrr::gui::TransferCurveEditor> surviving (editor);
     p->setModuleParameter (1, uid, "shift", 125.0); // A later base edit must survive an older panel's curve gesture.

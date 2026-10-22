@@ -6,6 +6,8 @@
 #include "PromptLanguage.h"
 #include "UiScale.h"
 #include "RandomPresetSettings.h"
+#include "ColourPaletteEditor.h"
+#include "FormulaWindowPreferences.h"
 #include "../parameters/ParamIDs.h"
 #include "../updates/UpdateService.h"
 namespace scrr::gui {
@@ -44,6 +46,14 @@ public:
             RandomPresetSettings::set (randomPresetCount.getSelectedId());
             saved = RandomPresetSettings::write (RandomPresetSettings::get(), preference.getSiblingFile ("random-preset-count.txt")); repaint();
         };
+        formulaWindow.setComponentID ("formula-window-mode");
+        formulaWindow.addItem ("Native system window", 1); formulaWindow.addItem ("Inside plugin window", 2);
+        formulaWindow.onChange = [this]
+        {
+            const auto mode = formulaWindow.getSelectedId() == 2 ? FormulaWindowPreferences::Mode::contained : FormulaWindowPreferences::Mode::native;
+            FormulaWindowPreferences::set (mode);
+            saved = FormulaWindowPreferences::write (mode, preference.getSiblingFile ("formula-window.txt")); repaint();
+        };
         close.onClick = [this] { setVisible (false); };
         generalTab.onClick = [this] { showPage (0); }; coloursTab.onClick = [this] { showPage (1); }; updatesTab.onClick = [this] { showPage (2); };
         restore.setComponentID ("restore-preset-recovery"); restore.onClick = [this] { if (restoreRecovery) restoreRecovery(); };
@@ -75,19 +85,29 @@ public:
             { if (! updates->schedule (true)) updateError = txt ("Could not schedule installation.", u8"无法安排安装。"); tick(); }
         };
         cancelUpdate.onClick = [this] { if (updates) updates->cancelScheduled(); tick(); };
-        for (auto* c : std::initializer_list<juce::Component*> { &close, &generalTab, &coloursTab, &updatesTab, &language, &frequencyLimit, &uiScale, &randomPresetCount, &restore, &guide,
+        for (auto* c : std::initializer_list<juce::Component*> { &close, &generalTab, &coloursTab, &updatesTab, &language, &frequencyLimit, &uiScale, &randomPresetCount, &formulaWindow, &restore, &guide,
             &profiles, &profileName, &saveProfile, &resetProfile, &checkUpdates, &downloadUpdate, &installUpdate, &cancelUpdate, &savedProjects }) addAndMakeVisible (c);
         for (int i = 0; i < ThemeProfiles::count; ++i)
-        { hex[(size_t) i].setComponentID ("colour-" + juce::String (i)); hex[(size_t) i].setInputRestrictions (7, "#0123456789abcdefABCDEF"); hex[(size_t) i].onTextChange = [this] { colourDraftDirty = true; }; addAndMakeVisible (hex[(size_t) i]); }
+        {
+            hex[(size_t) i].setComponentID ("colour-" + juce::String (i)); hex[(size_t) i].setInputRestrictions (7, "#0123456789abcdefABCDEF");
+            hex[(size_t) i].onTextChange = [this, i] { colourDraftDirty = true; refreshColourPreview (i); };
+            swatches[(size_t) i].setComponentID ("colour-preview-" + juce::String (i));
+            swatches[(size_t) i].setTooltip (txt ("Click to choose a colour. HEX edits update this preview immediately.", u8"点击打开调色盘，输入 HEX 时实时预览。"));
+            swatches[(size_t) i].onClick = [this, i] { openPalette (i); };
+            addAndMakeVisible (hex[(size_t) i]); addAndMakeVisible (swatches[(size_t) i]);
+        }
         refresh(); loadColours(); showPage (0);
     }
+    ~SettingsPanel() override { dismissPalette(); }
     std::function<void()> changed, restoreRecovery, openGuide;
     std::function<bool()> hasRecovery;
     void setUpdateService (std::shared_ptr<scrr::updates::UpdateService> service) { updates = std::move (service); }
-    void showPage (int value) { page = value; refreshVisibility(); resized(); repaint(); }
+    void showPage (int value) { if (value != 1) dismissPalette(); page = value; refreshVisibility(); resized(); repaint(); }
+    void visibilityChanged() override { if (! isShowing()) dismissPalette(); }
     void tick()
     {
         if (! randomPresetCount.isPopupActive()) randomPresetCount.setSelectedId (RandomPresetSettings::get(), juce::dontSendNotification);
+        if (! formulaWindow.isPopupActive()) formulaWindow.setSelectedId ((int) FormulaWindowPreferences::get(), juce::dontSendNotification);
         if (loadedThemeRevision != ThemeProfiles::get().revision())
         {
             if (colourDraftDirty && isVisible() && page == 1)
@@ -119,6 +139,9 @@ public:
         language.setSelectedId (PromptLanguage::get() == PromptLanguage::Language::chinese ? 2 : 1, juce::dontSendNotification);
         uiScale.setSelectedId (UiScale::get(), juce::dontSendNotification);
         randomPresetCount.setSelectedId (RandomPresetSettings::get(), juce::dontSendNotification);
+        formulaWindow.changeItemText (1, txt ("Native system window", u8"系统窗口"));
+        formulaWindow.changeItemText (2, txt ("Inside plugin window", u8"插件内窗口"));
+        formulaWindow.setSelectedId ((int) FormulaWindowPreferences::get(), juce::dontSendNotification);
         close.setButtonText (promptText ("CLOSE  x")); generalTab.setButtonText (txt ("GENERAL", u8"常规")); coloursTab.setButtonText (txt ("COLOURS", u8"配色")); updatesTab.setButtonText (txt ("UPDATES", u8"更新"));
         restore.setButtonText (txt ("RESTORE SHIFT RECOVERY", u8"恢复 Shift 切换前状态")); guide.setButtonText (txt ("OPEN QUICK GUIDE", u8"打开快速指南"));
         saveProfile.setButtonText (txt ("SAVE PROFILE", u8"保存配色")); resetProfile.setButtonText (txt ("RESET TO DEFAULT", u8"恢复默认"));
@@ -131,12 +154,16 @@ public:
         close.setBounds (getWidth() - 110, 18, 90, 30);
         const int w = (getWidth() - 48) / 3;
         generalTab.setBounds (24, 66, w - 4, 32); coloursTab.setBounds (24 + w, 66, w - 4, 32); updatesTab.setBounds (24 + 2*w, 66, w - 4, 32);
-        language.setBounds (24, 140, getWidth() - 48, 34); frequencyLimit.setBounds (24, 220, getWidth() - 48, 34); uiScale.setBounds (24, 300, getWidth() - 48, 34);
-        randomPresetCount.setBounds (24, 372, getWidth() - 48, 34);
-        restore.setBounds (24, 465, getWidth() - 48, 30); guide.setBounds (24, 507, getWidth() - 48, 30);
+        language.setBounds (24, 136, getWidth() - 48, 30); frequencyLimit.setBounds (24, 199, getWidth() - 48, 30); uiScale.setBounds (24, 262, getWidth() - 48, 30);
+        randomPresetCount.setBounds (24, 325, getWidth() - 48, 30); formulaWindow.setBounds (24, 388, getWidth() - 48, 30);
+        restore.setBounds (24, 477, getWidth() - 48, 30); guide.setBounds (24, 519, getWidth() - 48, 30);
         profiles.setBounds (24, 117, getWidth() - 48, 32); profileName.setBounds (24, 160, getWidth() - 48, 32);
         const int cw = (getWidth() - 60) / 2;
-        for (int i = 0; i < ThemeProfiles::count; ++i) hex[(size_t) i].setBounds (24 + (i%2)*(cw+12), 228 + (i/2)*53, cw, 28);
+        for (int i = 0; i < ThemeProfiles::count; ++i)
+        {
+            const int x = 24 + (i%2)*(cw+12), y = 228 + (i/2)*53;
+            hex[(size_t) i].setBounds (x, y, cw - 40, 28); swatches[(size_t) i].setBounds (x + cw - 34, y, 34, 28);
+        }
         saveProfile.setBounds (24, 498, cw, 32); resetProfile.setBounds (36 + cw, 498, cw, 32);
         checkUpdates.setBounds (24, 260, getWidth()-48, 32); downloadUpdate.setBounds (24, 305, getWidth()-48, 32);
         savedProjects.setBounds (24, 360, getWidth()-48, 34); installUpdate.setBounds (24, 408, getWidth()-48, 36); cancelUpdate.setBounds (24, 456, getWidth()-48, 32);
@@ -149,10 +176,11 @@ public:
         auto prose = [&] (const juce::String& text, int y, int h) { g.setColour (Theme::dim()); g.setFont (Theme::font (12)); g.drawFittedText (text, {24,y,getWidth()-48,h}, juce::Justification::topLeft, 8); };
         if (page == 0)
         {
-            label (promptText ("PROMPT LANGUAGE"), 111); label (promptText ("SPECTRAL FREQUENCY LIMIT"), 191); label (promptText ("UI SCALE"), 271);
-            label (txt ("RANDOM PRESET / EFFECT COUNT", u8"随机预设 / 效果数量"), 343);
-            prose (txt ("One recovery slot per instance, saved with your DAW project. Restore replaces the current edits and can be undone.", u8"每个实例保留一份恢复缓存，随 DAW 工程保存。恢复会替换当前编辑，可撤销。"), 419, 38);
-            prose (txt ("Language, scale, colours and random-preset effect count are shared local preferences. Frequency limit belongs to the preset.", u8"语言、缩放、配色和随机预设效果数为本机共享设置；频谱上限随预设保存。"), 551, 34);
+            label (promptText ("PROMPT LANGUAGE"), 110); label (promptText ("SPECTRAL FREQUENCY LIMIT"), 173); label (promptText ("UI SCALE"), 236);
+            label (txt ("RANDOM PRESET / EFFECT COUNT", u8"随机预设 / 效果数量"), 299);
+            label (txt ("FORMULA / LARGE EDITOR WINDOW", u8"FORMULA / 大编辑窗口"), 362);
+            prose (txt ("One recovery slot per instance, saved with your DAW project. Restore replaces the current edits and can be undone.", u8"每个实例保留一份恢复缓存，随 DAW 工程保存。恢复会替换当前编辑，可撤销。"), 432, 38);
+            prose (txt ("Language, scale, colours and editor options are shared local preferences. Frequency limit belongs to the preset.", u8"语言、缩放、配色和编辑器选项为本机共享设置；频谱上限随预设保存。"), 563, 34);
         }
         else if (page == 1)
         {
@@ -190,24 +218,59 @@ public:
     }
 private:
     static juce::String txt (const char* en,const char* zh) { return juce::String::fromUTF8(PromptLanguage::get()==PromptLanguage::Language::chinese?zh:en); }
+    void refreshColourPreview (int index)
+    {
+        juce::uint32 value {};
+        const bool valid = ThemeProfiles::parse (hex[(size_t) index].getText(), value);
+        const auto colour = valid ? juce::Colour (value) : swatches[(size_t) index].getPreview();
+        swatches[(size_t) index].setPreview (colour, valid);
+        if (valid && activePaletteSlot == index && paletteEditor) paletteEditor->setColour (colour);
+    }
+    void dismissPalette()
+    {
+        if (paletteCallout) paletteCallout->dismiss();
+        paletteCallout = nullptr; paletteEditor = nullptr; activePaletteSlot = -1;
+    }
+    void openPalette (int index)
+    {
+        dismissPalette(); activePaletteSlot = index;
+        auto picker = std::make_unique<ColourPaletteEditor> (swatches[(size_t) index].getPreview());
+        paletteEditor = picker.get(); const auto safe = juce::Component::SafePointer<SettingsPanel> (this);
+        const auto source = juce::Component::SafePointer<ColourPaletteEditor> (picker.get());
+        picker->changed = [safe, source, index] (juce::Colour colour)
+        {
+            if (! safe || ! source || ! safe->isShowing() || safe->page != 1 || safe->activePaletteSlot != index
+                || safe->paletteEditor.getComponent() != source.getComponent()) return;
+            safe->hex[(size_t) index].setText ("#" + colour.toDisplayString (false).toUpperCase(), false);
+            safe->colourDraftDirty = true; safe->refreshColourPreview (index);
+        };
+        auto& callout = juce::CallOutBox::launchAsynchronously (std::move (picker), swatches[(size_t) index].getBounds(), this);
+        paletteCallout = &callout;
+    }
     void loadColours()
     {
         auto& theme=ThemeProfiles::get(); profiles.clear(juce::dontSendNotification); profiles.addItemList(theme.names(),1); profiles.setText(theme.selected(),juce::dontSendNotification);
         profileName.setText(theme.selected()=="Default"?"My profile":theme.selected(),false);
-        for(int i=0;i<ThemeProfiles::count;++i) hex[(size_t)i].setText("#"+juce::String::toHexString((int)(theme.values()[(size_t)i]&0xffffffu)).paddedLeft('0',6).toUpperCase(),false);
+        for(int i=0;i<ThemeProfiles::count;++i)
+        { hex[(size_t)i].setText("#"+juce::String::toHexString((int)(theme.values()[(size_t)i]&0xffffffu)).paddedLeft('0',6).toUpperCase(),false); refreshColourPreview (i); }
         loadedThemeRevision = theme.revision(); colourDraftDirty = false;
     }
     void refreshVisibility()
     {
-        for(auto* c:std::initializer_list<juce::Component*> {&language,&frequencyLimit,&uiScale,&randomPresetCount,&restore,&guide}) c->setVisible(page==0);
+        for(auto* c:std::initializer_list<juce::Component*> {&language,&frequencyLimit,&uiScale,&randomPresetCount,&formulaWindow,&restore,&guide}) c->setVisible(page==0);
         for(auto* c:std::initializer_list<juce::Component*> {&profiles,&profileName,&saveProfile,&resetProfile}) c->setVisible(page==1);
         for(auto& c:hex)c.setVisible(page==1);
+        for(auto& c:swatches)c.setVisible(page==1);
         for(auto* c:std::initializer_list<juce::Component*> {&checkUpdates,&downloadUpdate,&installUpdate,&cancelUpdate,&savedProjects})c->setVisible(page==2);
         generalTab.setToggleState(page==0,juce::dontSendNotification);coloursTab.setToggleState(page==1,juce::dontSendNotification);updatesTab.setToggleState(page==2,juce::dontSendNotification);
     }
-    juce::File preference; juce::ComboBox language,frequencyLimit,uiScale,randomPresetCount,profiles;
+    juce::File preference; juce::ComboBox language,frequencyLimit,uiScale,randomPresetCount,formulaWindow,profiles;
     juce::TextButton close,generalTab,coloursTab,updatesTab,restore,guide,saveProfile,resetProfile,checkUpdates,downloadUpdate,installUpdate,cancelUpdate;
     juce::ToggleButton savedProjects; juce::TextEditor profileName; std::array<juce::TextEditor,ThemeProfiles::count> hex;
+    std::array<ColourPreviewButton, ThemeProfiles::count> swatches;
+    juce::Component::SafePointer<juce::CallOutBox> paletteCallout;
+    juce::Component::SafePointer<ColourPaletteEditor> paletteEditor;
+    int activePaletteSlot { -1 };
     bool saved{true};int page{};juce::String colourMessage,updateError;
     uint64_t loadedThemeRevision {}; bool colourDraftDirty {};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> frequencyAttachment;

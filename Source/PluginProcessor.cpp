@@ -932,7 +932,7 @@ scrr::params::HostBeat SpectralCrrptProcessor::captureHostBeat() noexcept
 void SpectralCrrptProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     captureHostBeat();
-    if (! license->isActivated()) { renderUnlicensed (buffer); return; }
+    if (! license->canProcessRealtime()) { renderUnlicensed (buffer); return; }
     juce::ignoreUnused (midi); hostBypassDelay (buffer, true);
 }
 
@@ -958,8 +958,11 @@ void SpectralCrrptProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
 {
     juce::ScopedNoDenormals noDenormals;
     const auto beat = captureHostBeat();
-    if (! license->isActivated()) { renderUnlicensed (buffer); return; }
+    if (! license->canProcessRealtime()) { renderUnlicensed (buffer); return; }
     if (buffer.getNumSamples() == 0) return;
+    // The host marks offline rendering. Demo exports follow the existing
+    // latency-compensated dry bypass; real-time exports look like playback.
+    if (! license->isActivated() && isNonRealtime()) { hostBypassDelay (buffer, true); return; }
     hostBypassDelay (buffer, false);
     consumeRack();
     spectralProcessor.applyMacroValues (getModulationValues());

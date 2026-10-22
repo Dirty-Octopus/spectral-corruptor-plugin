@@ -4,6 +4,7 @@
 #pragma once
 #include "../Theme.h"
 #include "../AssignableSlider.h"
+#include "../FormulaWindowPreferences.h"
 #include "../../parameters/RemapFormula.h"
 #include "../../parameters/RemapFormulaRandom.h"
 #include <functional>
@@ -12,7 +13,7 @@
 
 namespace scrr::gui {
 
-/** A detached native graph editor. Formula state is executable; formulaView is
+/** A graph editor with an optional larger workspace. Formula state is executable; formulaView is
     presentation only. Callbacks always refer to the currently selected UID. */
 class RemapFormulaEditor : public juce::Component
 {
@@ -22,6 +23,71 @@ class RemapFormulaEditor : public juce::Component
     using Op = scrr::params::FormulaOp;
     using Unit = scrr::params::FormulaUnit;
     using Program = scrr::params::FormulaProgram;
+
+    class Surface : public juce::Component
+    {
+    public:
+        explicit Surface (RemapFormulaEditor& editor) : owner (editor) { setComponentID ("formula-surface"); }
+        void resized() override { owner.layoutSurface(); }
+        void paint (juce::Graphics& g) override { owner.paintSurface (g); }
+    private:
+        RemapFormulaEditor& owner;
+    };
+    class PopoutButton : public juce::Button
+    {
+    public:
+        PopoutButton() : juce::Button ("Open larger Formula editor") { setComponentID ("formula-popout"); }
+        void paintButton (juce::Graphics& g, bool over, bool down) override
+        {
+            g.fillAll (down ? Theme::blue() : over ? Theme::panel().brighter (.15f) : Theme::panel());
+            g.setColour (over ? Theme::white() : Theme::line()); g.drawRect (getLocalBounds());
+            auto b = getLocalBounds().toFloat().reduced (7);
+            g.setColour (Theme::yellow());
+            juce::Path icon;
+            icon.startNewSubPath (b.getX(), b.getY() + 3); icon.lineTo (b.getX(), b.getBottom()); icon.lineTo (b.getRight() - 3, b.getBottom());
+            icon.startNewSubPath (b.getCentreX() - 2, b.getCentreY() + 2); icon.lineTo (b.getRight(), b.getY());
+            icon.startNewSubPath (b.getCentreX(), b.getY()); icon.lineTo (b.getRight(), b.getY()); icon.lineTo (b.getRight(), b.getCentreY());
+            g.strokePath (icon, juce::PathStrokeType (1.5f));
+        }
+    };
+    class PopoutWindow : public juce::DocumentWindow
+    {
+    public:
+        PopoutWindow (RemapFormulaEditor& editor, bool native)
+            : juce::DocumentWindow ("Spectral Corruptor / Formula", Theme::black(), juce::DocumentWindow::closeButton, native), owner (&editor)
+        {
+            setComponentID ("formula-popout-window"); setUsingNativeTitleBar (native);
+            setResizable (true, true); setDraggable (true); setResizeLimits (640, 480, 2400, 1800);
+            if (auto* bounds = getConstrainer()) bounds->setMinimumOnscreenAmounts (32, 80, 80, 80);
+        }
+        ~PopoutWindow() override { clearContentComponent(); setLookAndFeel (nullptr); }
+        void parentSizeChanged() override
+        {
+            juce::DocumentWindow::parentSizeChanged();
+            if (auto* parent = getParentComponent())
+            {
+                const auto area = parent->getLocalBounds().reduced (8);
+                if (area.isEmpty()) return;
+                setResizeLimits (juce::jmin (640, area.getWidth()), juce::jmin (480, area.getHeight()), area.getWidth(), area.getHeight());
+                const int width = juce::jmin (getWidth(), area.getWidth()), height = juce::jmin (getHeight(), area.getHeight());
+                setBounds (juce::jlimit (area.getX(), area.getRight() - width, getX()), juce::jlimit (area.getY(), area.getBottom() - height, getY()), width, height);
+            }
+        }
+        void closeButtonPressed() override
+        {
+            // DocumentWindow is owned by the editor. Release it only after this
+            // native close-button callback has returned.
+            setVisible (false);
+            const auto safeOwner = owner;
+            const auto safeWindow = juce::Component::SafePointer<PopoutWindow> (this);
+            juce::MessageManager::callAsync ([safeOwner, safeWindow]
+            {
+                if (safeOwner && safeWindow && safeOwner->popout.get() == safeWindow.getComponent()) safeOwner->closePopout();
+            });
+        }
+    private:
+        juce::Component::SafePointer<RemapFormulaEditor> owner;
+    };
 
     struct Entry : juce::Component
     {
@@ -396,62 +462,135 @@ public:
     std::function<double(const juce::Identifier&, double)> effectiveValue;
     std::function<double(const juce::Identifier&, double)> parameterResetValue;
 
-    RemapFormulaEditor() : canvas (*this), preview (*this)
+    RemapFormulaEditor() : surface (*this), canvas (*this), preview (*this)
     {
-        setComponentID ("remap-formula-editor");
-        addAndMakeVisible (details); details.setButtonText ("SETTINGS"); details.setComponentID ("formula-details"); details.setClickingTogglesState (true);
+        setComponentID ("remap-formula-editor"); addAndMakeVisible (surface);
+        surface.addAndMakeVisible (popoutButton); popoutButton.setTooltip ("Open a larger editable Formula workspace. Window style is in plugin Settings.");
+        const auto safe = juce::Component::SafePointer<RemapFormulaEditor> (this);
+        popoutButton.onClick = [safe] { if (safe) safe->openPopout(); };
+        addChildComponent (returnToInspector); returnToInspector.setButtonText ("RETURN TO INSPECTOR"); returnToInspector.setComponentID ("formula-popout-return");
+        returnToInspector.onClick = [safe]
+        {
+            juce::MessageManager::callAsync ([safe] { if (safe) safe->closePopout(); });
+        };
+        surface.addAndMakeVisible (details); details.setButtonText ("SETTINGS"); details.setComponentID ("formula-details"); details.setClickingTogglesState (true);
         details.onClick = [this] { showDetails = details.getToggleState(); updateDetails(); notifyLayout(); };
-        units.addItem ("Hz", 1); units.addItem ("NORMALIZED (LOG)", 2); units.setComponentID ("formula-units"); addAndMakeVisible (units);
+        units.addItem ("Hz", 1); units.addItem ("NORMALIZED (LOG)", 2); units.setComponentID ("formula-units"); surface.addAndMakeVisible (units);
         units.setTooltip ("Hz uses frequency directly. Normalized uses logarithmic 0..1 frequency coordinates. Changing units keeps node values.");
         units.onChange = [this] { graph.unit = units.getSelectedId() == 2 ? Unit::Normalized : Unit::Hertz; resetViewRange(); submitGraphAndView(); updateDetails(); };
-        addAndMakeVisible (probeDisclosure); probeDisclosure.setComponentID ("formula-probe-menu"); probeDisclosure.setButtonText ("PREVIEW x"); probeDisclosure.setClickingTogglesState (true);
+        surface.addAndMakeVisible (probeDisclosure); probeDisclosure.setComponentID ("formula-probe-menu"); probeDisclosure.setButtonText ("PREVIEW x"); probeDisclosure.setClickingTogglesState (true);
         probeDisclosure.onClick = [this] { showProbe = probeDisclosure.getToggleState(); probe.setVisible (showProbe); probeMode.setVisible (showProbe); notifyLayout(); };
-        addChildComponent (probe); probe.onCommit = [this]
+        surface.addChildComponent (probe); probe.onCommit = [this]
         {
             const double x = probe.number(); if (! std::isfinite (x)) { showError ("Probe x must be finite."); return; }
             view.probeX = hoverProbeX = x; view.followMouse = false; submitView(); updateDetails(); refreshReadouts(); canvas.repaint(); preview.repaint();
         };
-        probeMode.addItem ("MANUAL x", 1); probeMode.addItem ("FOLLOW PREVIEW", 2); probeMode.setComponentID ("formula-probe-mode"); addChildComponent (probeMode);
+        probeMode.addItem ("MANUAL x", 1); probeMode.addItem ("FOLLOW PREVIEW", 2); probeMode.setComponentID ("formula-probe-mode"); surface.addChildComponent (probeMode);
         probeMode.onChange = [this] { view.followMouse = probeMode.getSelectedId() == 2; hoverProbeX = view.probeX; submitView(); refreshReadouts(); canvas.repaint(); preview.repaint(); };
-        viewport.setViewedComponent (&canvas, false); viewport.setScrollBarsShown (false, false); viewport.setScrollBarThickness (10); viewport.setComponentID ("formula-viewport"); addAndMakeVisible (viewport);
-        for (auto* button : { &randomGraph, &home, &bringOffscreen, &clearOffscreen }) addAndMakeVisible (*button);
+        viewport.setViewedComponent (&canvas, false); viewport.setScrollBarsShown (false, false); viewport.setScrollBarThickness (10); viewport.setComponentID ("formula-viewport"); surface.addAndMakeVisible (viewport);
+        for (auto* button : { &randomGraph, &home, &bringOffscreen, &clearOffscreen }) surface.addAndMakeVisible (*button);
         randomGraph.setButtonText ("RANDOM"); randomGraph.setComponentID ("formula-random"); randomGraph.setTooltip ("Generate a connected formula graph. Node count is in Settings. Existing parameter definitions and mappings are preserved. Undo restores the previous graph.");
         home.setButtonText ("HOME"); home.setComponentID ("formula-home"); home.setTooltip ("Return the view to the origin at 100% zoom. Node positions and audio stay unchanged.");
         bringOffscreen.setButtonText ("BRING IN"); bringOffscreen.setComponentID ("formula-bring-offscreen"); bringOffscreen.setTooltip ("Move fully off-screen nodes into view, keeping their connections and values.");
         clearOffscreen.setButtonText ("CLEAR OUT"); clearOffscreen.setComponentID ("formula-clear-offscreen"); clearOffscreen.setTooltip ("Delete only nodes fully outside the visible canvas, along with their connected wires. Partial nodes and Output remain. Undo restores the graph.");
         home.onClick = [this] { canvas.cancel(); view.panX = view.panY = 0; view.zoom = 1; layoutCanvas(); submitView(); refreshPreview(); };
         bringOffscreen.onClick = [this] { bringOutsideNodes(); }; clearOffscreen.onClick = [this] { clearOutsideNodes(); }; randomGraph.onClick = [this] { generateGraph(); };
-        addAndMakeVisible (hints); hints.setFont (Theme::font (10)); hints.setColour (juce::Label::textColourId, Theme::dim());
+        surface.addAndMakeVisible (hints); hints.setFont (Theme::font (10)); hints.setColour (juce::Label::textColourId, Theme::dim());
         hints.setText ("Right-click: add / edit / delete   |   Wheel: zoom   |   Drag: pan", juce::dontSendNotification);
         hints.setTooltip ("Right-click a wire to insert a node. Double-click a Parameter to expand it. Drag a connected input to move its wire; drop on empty space to disconnect.");
-        addAndMakeVisible (preview); addAndMakeVisible (status); status.setComponentID ("formula-status"); status.setFont (Theme::font (11));
-        for (auto* field : { &xMin, &xMax, &yMin, &yMax }) { addChildComponent (*field); field->onCommit = [this] { commitViewFields(); }; }
+        surface.addAndMakeVisible (preview); surface.addAndMakeVisible (status); status.setComponentID ("formula-status"); status.setFont (Theme::font (11));
+        for (auto* field : { &xMin, &xMax, &yMin, &yMax }) { surface.addChildComponent (*field); field->onCommit = [this] { commitViewFields(); }; }
         for (auto* field : { &name, &minimum, &maximum, &defaultValue, &step }) { canvas.addChildComponent (*field); field->onCommit = [this] { commitParameterFields(); }; }
         logX.setButtonText ("X LOG"); logY.setButtonText ("Y LOG"); grid.setButtonText ("GRID"); parameterLog.setButtonText ("LOG PARAM");
-        for (auto* toggle : { &logX, &logY, &grid }) addChildComponent (*toggle);
+        for (auto* toggle : { &logX, &logY, &grid }) surface.addChildComponent (*toggle);
         canvas.addChildComponent (parameterLog);
         logX.setComponentID ("formula-view-log-x"); logY.setComponentID ("formula-view-log-y"); grid.setComponentID ("formula-view-grid"); parameterLog.setComponentID ("formula-param-log");
         logX.onClick = logY.onClick = grid.onClick = [this] { commitViewFields(); }; parameterLog.onClick = [this] { commitParameterFields(); };
-        for (const int count : { 64, 128, 256, 512, 1024 }) precision.addItem (juce::String (count) + " SAMPLES", count);
-        precision.setComponentID ("formula-view-samples"); addChildComponent (precision); precision.onChange = [this] { commitViewFields(); };
-        nodeDisplay.addItem ("NUMERIC VALUES", 1); nodeDisplay.addItem ("ALGEBRAIC A / B", 2); nodeDisplay.setComponentID ("formula-node-display"); addChildComponent (nodeDisplay);
-        nodeLanguage.addItem ("English", 1); nodeLanguage.addItem (juce::String::fromUTF8 ("简体中文"), 2); nodeLanguage.setComponentID ("formula-node-language"); addChildComponent (nodeLanguage);
+        for (const int count : { 64, 128, 256, 512, 1024 }) precision.addItem (juce::String (count), count);
+        precision.setTooltip ("Preview plot sample count. Display only; audio calculation is unchanged.");
+        precision.setComponentID ("formula-view-samples"); surface.addChildComponent (precision); precision.onChange = [this] { commitViewFields(); };
+        nodeDisplay.addItem ("NUMERIC VALUES", 1); nodeDisplay.addItem ("ALGEBRAIC A / B", 2); nodeDisplay.setComponentID ("formula-node-display"); surface.addChildComponent (nodeDisplay);
+        nodeLanguage.addItem ("English", 1); nodeLanguage.addItem (juce::String::fromUTF8 ("简体中文"), 2); nodeLanguage.setComponentID ("formula-node-language"); surface.addChildComponent (nodeLanguage);
         nodeLanguage.setTooltip ("Node names only. Independent of the plugin language; custom parameter names and mathematical symbols stay unchanged.");
         nodeDisplay.onChange = [this] { view.symbolic = nodeDisplay.getSelectedId() == 2; submitView(); canvas.repaint(); };
         nodeLanguage.onChange = [this] { view.chinese = nodeLanguage.getSelectedId() == 2; submitView(); canvas.repaint(); };
         invalidPolicy.addItem ("SILENCE AFFECTED FREQUENCIES", 1); invalidPolicy.addItem ("ORIGINAL INPUT FREQUENCY", 2);
-        invalidPolicy.setComponentID ("formula-invalid-policy"); addChildComponent (invalidPolicy);
+        invalidPolicy.setComponentID ("formula-invalid-policy"); surface.addChildComponent (invalidPolicy);
         invalidPolicy.setTooltip ("Audio: undefined or out-of-range destinations silence only their source frequencies by default. Original input frequency keeps those sources in place. Plot display limits do not affect this policy.");
         invalidPolicy.onChange = [this] { submitProperty ("remapInvalidPolicy", invalidPolicy.getSelectedId() == 2 ? 1 : 0); refreshPreview(); };
-        complexity.setComponentID ("formula-random-complexity"); complexity.setRange (3, 64, 1); complexity.setSliderStyle (juce::Slider::LinearHorizontal); complexity.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 24); addChildComponent (complexity);
+        complexity.setComponentID ("formula-random-complexity"); complexity.setRange (3, 64, 1); complexity.setSliderStyle (juce::Slider::LinearHorizontal); complexity.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 24); surface.addChildComponent (complexity);
         complexity.onValueChange = [this] { view.complexity = (int) complexity.getValue(); submitView(); };
         compilePrograms(); rebuildParameters(); updateDetails();
     }
-    ~RemapFormulaEditor() override { viewport.setViewedComponent (nullptr, false); }
+    ~RemapFormulaEditor() override
+    {
+        if (popout) { popout->clearContentComponent(); popout.reset(); }
+        surface.setLookAndFeel (nullptr); viewport.setViewedComponent (nullptr, false);
+    }
+    void openPopout()
+    {
+        if (popout) { popout->setVisible (true); popout->toFront (true); return; }
+        if (getModuleUid().isEmpty()) return;
+        canvas.cancel();
+        const bool native = FormulaWindowPreferences::get() == FormulaWindowPreferences::Mode::native;
+        auto* host = getTopLevelComponent();
+        if (! native)
+        {
+            juce::Component* transformedHost = nullptr;
+            for (auto* ancestor = getParentComponent(); ancestor != nullptr; ancestor = ancestor->getParentComponent())
+            {
+                // The named logical surface remains the right owner at 100%
+                // scale too, including when a Standalone host adds wrappers.
+                if (ancestor->getComponentID() == "editor-content") { host = ancestor; transformedHost = nullptr; break; }
+                if (transformedHost == nullptr && ! ancestor->getTransform().isIdentity()) transformedHost = ancestor;
+            }
+            if (transformedHost != nullptr) host = transformedHost;
+        }
+        // The same controls move between hosts; parameters, selection, viewport
+        // and mapping callbacks retain one owner throughout the transfer.
+        popout = std::make_unique<PopoutWindow> (*this, native);
+        popout->setLookAndFeel (&getLookAndFeel()); surface.setLookAndFeel (&getLookAndFeel());
+        popoutButton.setVisible (false); returnToInspector.setVisible (true);
+        popout->setContentNonOwned (&surface, false);
+        if (native)
+        {
+            auto bounds = juce::Rectangle<int> (0, 0, 1120, 820);
+            const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds());
+            if (display != nullptr) bounds = bounds.withSizeKeepingCentre (juce::jmin (1120, display->userArea.getWidth() - 40), juce::jmin (820, display->userArea.getHeight() - 40));
+            popout->centreWithSize (bounds.getWidth(), bounds.getHeight());
+        }
+        else
+        {
+            if (host == this || host == nullptr) { closePopout(); return; }
+            host->addAndMakeVisible (*popout);
+            auto bounds = host->getLocalBounds().reduced (14);
+            popout->setResizeLimits (juce::jmin (640, bounds.getWidth()), juce::jmin (480, bounds.getHeight()), bounds.getWidth(), bounds.getHeight());
+            popout->setBounds (bounds.withSizeKeepingCentre (juce::jmin (1120, bounds.getWidth()), juce::jmin (800, bounds.getHeight())));
+        }
+        popout->setVisible (true); popout->toFront (true); surface.resized(); notifyLayout();
+    }
+    void closePopout()
+    {
+        if (! popout) return;
+        canvas.cancel(); popout->clearContentComponent(); popout.reset();
+        surface.setLookAndFeel (nullptr); addAndMakeVisible (surface);
+        popoutButton.setVisible (true); returnToInspector.setVisible (false); notifyLayout();
+    }
+    bool isPopoutOpen() const { return popout != nullptr; }
+    juce::DocumentWindow* getPopoutWindow() const { return popout.get(); }
+    void visibilityChanged() override
+    {
+        if (! popout || isShowing()) return;
+        // Inspector refreshes temporarily hide the same selected module. Check
+        // after refresh before closing a workspace that is still selected.
+        const auto safe = juce::Component::SafePointer<RemapFormulaEditor> (this);
+        juce::MessageManager::callAsync ([safe] { if (safe && safe->popout && ! safe->isShowing()) safe->closePopout(); });
+    }
     void setState (const juce::ValueTree& module)
     {
         const auto nextUid = module.getProperty ("uid").toString();
         const bool changedUid = nextUid != getModuleUid();
+        if (changedUid) closePopout();
         const auto encoded = module.getProperty ("remapFormula").toString(); const auto encodedView = module.getProperty ("formulaView").toString();
         const bool changedGraph = changedUid || encoded != state.getProperty ("remapFormula").toString();
         const bool changedView = changedUid || encodedView != state.getProperty ("formulaView").toString();
@@ -489,12 +628,12 @@ public:
     {
         if (sliderGesture || canvas.editing()) return true;
         const auto source = juce::Desktop::getInstance().getMainMouseSource();
-        if (source.isDragging()) if (const auto* target = source.getComponentUnderMouse()) if (target == this || isParentOf (target)) return true;
-        return dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr && hasKeyboardFocus (true);
+        if (source.isDragging()) if (const auto* target = source.getComponentUnderMouse()) if (target == &surface || surface.isParentOf (target)) return true;
+        return dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr && surface.hasKeyboardFocus (true);
     }
     std::vector<AssignableSlider*> getParameterSliders()
     { std::vector<AssignableSlider*> result; for (auto& row : parameterRows) result.push_back (&row->slider); return result; }
-    int getPreferredHeight() const { return 578 + (showProbe ? 49 : 0) + (showDetails ? 248 : 0); }
+    int getPreferredHeight() const { return popout ? 78 : 578 + (showProbe ? 49 : 0) + (showDetails ? 248 : 0); }
     int preferredHeight() const { return getPreferredHeight(); }
     // Geometry is expressed in canvas pixels so host/UI tests use the same hit
     // targets as users after zooming, without coupling to the card layout.
@@ -532,7 +671,19 @@ public:
     }
     void resized() override
     {
-        auto area = getLocalBounds(); auto toolbar = area.removeFromTop (28);
+        if (! popout) surface.setBounds (getLocalBounds());
+        else surface.resized();
+        returnToInspector.setBounds (getLocalBounds().withTrimmedTop (36).withHeight (28));
+    }
+    void paint (juce::Graphics& g) override
+    {
+        if (popout) Theme::text (g, "FORMULA / OPEN IN LARGE WORKSPACE", getLocalBounds().withHeight (30), 11, Theme::yellow(), true);
+    }
+private:
+    void layoutSurface()
+    {
+        auto area = surface.getLocalBounds().reduced (popout ? 12 : 0); auto toolbar = area.removeFromTop (28);
+        if (! popout) { popoutButton.setBounds (toolbar.removeFromRight (28).reduced (0, 1)); toolbar.removeFromRight (5); }
         details.setBounds (toolbar.removeFromRight (82).reduced (0, 1)); toolbar.removeFromRight (5);
         probeDisclosure.setBounds (toolbar.removeFromRight (88).reduced (0, 1)); toolbar.removeFromRight (5); units.setBounds (toolbar.reduced (0, 1));
         if (showProbe)
@@ -542,23 +693,30 @@ public:
         }
         area.removeFromTop (6); auto navigation = area.removeFromTop (26); const int buttonWidth = (navigation.getWidth() - 18) / 4;
         for (auto* button : { &randomGraph, &home, &bringOffscreen, &clearOffscreen }) { button->setBounds (navigation.removeFromLeft (buttonWidth)); navigation.removeFromLeft (6); }
-        hints.setBounds (area.removeFromTop (24)); viewport.setBounds (area.removeFromTop (340)); area.removeFromTop (7);
+        hints.setBounds (area.removeFromTop (24));
+        const bool sideDetails = popout && showDetails;
+        detailBounds = {};
+        if (sideDetails) { detailBounds = area.removeFromRight (270).withHeight (248); area.removeFromRight (12); }
+        const int footerHeight = 154 + (showDetails && ! sideDetails ? 248 : 0);
+        const int canvasHeight = popout ? juce::jmax (120, area.getHeight() - footerHeight) : 340;
+        viewport.setBounds (area.removeFromTop (canvasHeight)); area.removeFromTop (7);
         preview.setBounds (area.removeFromTop (108)); status.setBounds (area.removeFromTop (32)); area.removeFromTop (7);
-        detailBounds = showDetails ? area.removeFromTop (248) : juce::Rectangle<int> {};
+        if (showDetails && ! sideDetails) detailBounds = area.removeFromTop (248);
         if (showDetails)
         {
             auto panel = detailBounds; panel.removeFromTop (20); auto range = panel.removeFromTop (42); const int w = (range.getWidth() - 18) / 4;
             for (auto* field : { &xMin, &xMax, &yMin, &yMax }) { field->setBounds (range.removeFromLeft (w)); range.removeFromLeft (6); }
             panel.removeFromTop (6); auto toggles = panel.removeFromTop (26);
-            logX.setBounds (toggles.removeFromLeft (72)); logY.setBounds (toggles.removeFromLeft (72)); grid.setBounds (toggles.removeFromLeft (70)); precision.setBounds (toggles);
+            logX.setBounds (toggles.removeFromLeft (60)); logY.setBounds (toggles.removeFromLeft (60)); grid.setBounds (toggles.removeFromLeft (58)); precision.setBounds (toggles);
             panel.removeFromTop (26); auto row = panel.removeFromTop (27); nodeDisplay.setBounds (row.removeFromLeft (row.getWidth() / 2).withTrimmedRight (6)); nodeLanguage.setBounds (row);
             panel.removeFromTop (20); invalidPolicy.setBounds (panel.removeFromTop (27));
             panel.removeFromTop (25); complexity.setBounds (panel.removeFromTop (27));
         }
         layoutCanvas();
     }
-    void paint (juce::Graphics& g) override
+    void paintSurface (juce::Graphics& g)
     {
+        if (popout) g.fillAll (Theme::black());
         if (! showDetails) return;
         Theme::text (g, "PREVIEW / DISPLAY RANGE", detailBounds.withHeight (18), 10, Theme::yellow(), true);
         auto row = detailBounds.withTrimmedTop (101).withHeight (18);
@@ -1001,6 +1159,10 @@ private:
         }
         return result;
     }
+    Surface surface;
+    std::unique_ptr<PopoutWindow> popout;
+    PopoutButton popoutButton;
+    juce::TextButton returnToInspector;
     juce::ValueTree state { "module" }; Formula graph; Program program; View view;
     double frequencyLimit { 20000 }, hoverProbeX { 200 }; juce::String decodeError, editError, selectedParameter;
     int selectedNode { 0 }, expandedNode { -1 }, nextNodeId { 1 }; bool showDetails {}, showProbe {}, sliderGesture {};

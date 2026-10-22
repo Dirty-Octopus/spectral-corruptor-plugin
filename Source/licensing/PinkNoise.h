@@ -19,7 +19,7 @@ public:
         while ((bits & 1u) == 0 && row < rows.size()) { bits >>= 1; ++row; }
         if (row < rows.size()) { sum -= rows[row]; rows[row] = white(); sum += rows[row]; }
         if ((counter & 0xffffu) == 0) { sum = 0; for (auto value : rows) sum += value; }
-        return (sum + white()) * .0065f;
+        return (sum + white()) * .00325f;
     }
 private:
     float white() noexcept

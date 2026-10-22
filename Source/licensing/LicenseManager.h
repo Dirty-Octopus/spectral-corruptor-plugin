@@ -18,6 +18,10 @@ public:
     static juce::File defaultFile();
     const juce::String& getMachineCode() const noexcept { return machine; }
     bool isActivated() const noexcept { return activated.load (std::memory_order_acquire); }
+    bool canProcessRealtime() const noexcept { return isActivated(); }
+    bool isDemoActive() const noexcept { return false; }
+    int64_t demoRemainingSeconds() const noexcept { return 0; }
+    juce::String demoStatusText() const { return "Demo is unavailable in the source placeholder."; }
     juce::Result validate (const juce::String&) const;
     juce::Result activate (const juce::String&);
 private:

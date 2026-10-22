@@ -4,6 +4,7 @@
 #pragma once
 
 #include "../Theme.h"
+#include "../CurveGridSettings.h"
 #include "../../parameters/TransferCurve.h"
 #include <functional>
 
@@ -20,8 +21,15 @@ public:
     TransferCurveEditor()
     {
         setWantsKeyboardFocus (true);
-        setTooltip ("Double-click empty space to add a point. Right-click a point to assign X/Y modulation. Double-click a point or press Delete to remove it. Drag a hollow midpoint to bend a segment. Shift-drag for fine adjustment.");
+        addAndMakeVisible (grid);
+       #if JUCE_MAC
+        const juce::String snapKey = "Cmd";
+       #else
+        const juce::String snapKey = "Alt";
+       #endif
+        setTooltip ("Double-click empty space to add a point. Right-click a point to assign X/Y modulation; right-click empty space or use GRID to set X/Y divisions. Double-click a point or press Delete to remove it. Drag a hollow midpoint to bend a segment. Shift-drag for fine adjustment. Hold " + snapKey + " while dragging to snap both axes to the grid.");
     }
+    void resized() override { grid.setBounds (getWidth() / 2 - 22, 3, 44, 18); }
     void setCurve (const Curve& next) { curve = next; curve.sanitise (fixedEnds, pinCentre); repaint(); }
     void setPreviewCurve (const Curve& next)
     {
@@ -49,14 +57,10 @@ public:
     {
         const auto area = getPlotBounds();
         g.fillAll (Theme::field());
-        Theme::text (g, yLabel, { 14, 3, getWidth() / 2, 18 }, 10, Theme::dim(), true);
+        Theme::text (g, yLabel, { 14, 3, getWidth() / 2 - 40, 18 }, 10, Theme::dim(), true);
         Theme::text (g, xLabel + "  >", { getWidth() / 2, getHeight() - 21, getWidth() / 2 - 14, 18 }, 10, Theme::dim(), true, juce::Justification::centredRight);
         g.setColour (Theme::line());
-        for (int i = 0; i <= 4; ++i)
-        {
-            g.drawVerticalLine ((int) (area.getX() + area.getWidth() * (float) i / 4), area.getY(), area.getBottom());
-            g.drawHorizontalLine ((int) (area.getY() + area.getHeight() * (float) i / 4), area.getX(), area.getRight());
-        }
+        CurveGridSettings::drawGrid (g, area);
         g.setColour (Theme::dim().withAlpha (0.35f));
         const juce::Line<float> diagonal (area.getBottomLeft(), area.getTopRight());
         const float dash[] { 3, 4 }; g.drawDashedLine (diagonal, dash, 2, 1.0f);
@@ -102,14 +106,19 @@ public:
         { input = curve.points[(size_t) readoutPoint].x; output = curve.points[(size_t) readoutPoint].y; }
         const auto coordinates = input < 0 ? highLabel : coordinateFormatter ? coordinateFormatter (input, output)
             : juce::String (input * 100, 1) + "% > " + juce::String (output * 100, 1) + "%";
-        Theme::text (g, coordinates, { getWidth() / 2, 3, getWidth() / 2 - 14, 18 }, 9,
+        Theme::text (g, coordinates, { getWidth() / 2 + 27, 3, getWidth() / 2 - 41, 18 }, 9,
                      input < 0 ? Theme::dim() : Theme::white(), true, juce::Justification::centredRight);
     }
 
     void mouseDown (const juce::MouseEvent& e) override
     {
         selected = nearestPoint (e.position); segment = -1; dragging = false;
-        if (e.mods.isPopupMenu()) { if (selected >= 0 && nodeMenu) nodeMenu (*this, curve.points[(size_t) selected].id); return; }
+        if (e.mods.isPopupMenu())
+        {
+            if (selected >= 0) { if (nodeMenu) nodeMenu (*this, curve.points[(size_t) selected].id); }
+            else CurveGridSettings::showMenu (*this);
+            return;
+        }
         if (selected < 0) segment = nearestHandle (e.position);
         if (selected < 0 && segment < 0) { repaint(); return; }
         dragging = true; dragStart = e.position;
@@ -131,11 +140,15 @@ public:
         if (selected < 0 || selected >= (int) curve.points.size() || isPinned (selected)) return;
         auto& p = curve.points[(size_t) selected]; const auto area = getPlotBounds();
         const float fine = e.mods.isShiftDown() ? 0.1f : 1.0f;
-        const float y = startPoint.y + (dragStart.y - e.position.y) / area.getHeight() * fine;
-        p.y = juce::jlimit (pinCentre && p.x > 0.5f ? 0.5f : 0.0f, pinCentre && p.x < 0.5f ? 0.5f : 1.0f, y);
+        float x = startPoint.x + (e.position.x - dragStart.x) / area.getWidth() * fine;
+        float y = startPoint.y + (dragStart.y - e.position.y) / area.getHeight() * fine;
+        if (CurveGridSettings::shouldSnap (e.mods))
+        { const auto counts = CurveGridSettings::get(); x = CurveGridSettings::snap (x, counts.x); y = CurveGridSettings::snap (y, counts.y); }
         if (selected > 0 && selected + 1 < (int) curve.points.size())
-            p.x = juce::jlimit (curve.points[(size_t) selected - 1].x + 0.001f, curve.points[(size_t) selected + 1].x - 0.001f,
-                               startPoint.x + (e.position.x - dragStart.x) / area.getWidth() * fine);
+            p.x = CurveGridSettings::shouldSnap (e.mods)
+                ? CurvePointEditing::snapX (x, p.x, curve.points[(size_t) selected - 1].x, curve.points[(size_t) selected + 1].x, CurveGridSettings::get().x)
+                : CurvePointEditing::constrainX (x, p.x, curve.points[(size_t) selected - 1].x, curve.points[(size_t) selected + 1].x);
+        p.y = juce::jlimit (pinCentre && p.x > 0.5f ? 0.5f : 0.0f, pinCentre && p.x < 0.5f ? 0.5f : 1.0f, y);
         submit();
     }
     void mouseUp (const juce::MouseEvent&) override { dragging = false; segment = -1; repaint(); }
@@ -186,9 +199,10 @@ private:
         if (selected <= 0 || selected + 1 >= (int) curve.points.size() || isPinned (selected)) return;
         curve.points.erase (curve.points.begin() + selected); selected = -1; submit();
     }
-    void submit() { repaint(); if (onChange) onChange (curve); }
+    void submit() { CurvePointEditing::normalise (curve.points, pinCentre); repaint(); if (onChange) onChange (curve); }
 
     Curve curve, previewCurve;
+    CurveGridButton grid;
     juce::String xLabel { "SOURCE" }, yLabel { "RESPONSE" }, lowLabel { "0%" }, highLabel { "100%" };
     std::function<juce::String(float, float)> coordinateFormatter;
     bool fixedEnds {}, pinCentre {}, dragging {}, hasPreview {};

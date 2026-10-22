@@ -829,11 +829,11 @@ TEST_CASE ("Macro controls, context assignment and range editing survive editor 
     REQUIRE (waitForUI ([&] { return getSlider()->isMacroControlled(); }));
     dynamic_cast<juce::Button*> (findID (*editor, "macro-map-1"))->triggerClick(); pump (40);
     auto* panel = findID (*editor, "macro-mappings"); REQUIRE (panel && panel->isVisible());
-    auto* low = dynamic_cast<juce::TextEditor*> (findID (*panel, "map-low")); REQUIRE (low != nullptr);
-    low->setText ("-10"); low->onReturnKey();
+    auto* low = dynamic_cast<juce::Slider*> (findID (*panel, "map-low")); REQUIRE (low != nullptr);
+    low->setValue (-10, juce::sendNotificationSync);
     REQUIRE (waitForUI ([&] { return std::abs (p->getMacroMappings()[0].startOffset + .1) < .0001; }));
-    auto* centre = dynamic_cast<juce::TextEditor*> (findID (*panel, "map-centre")); REQUIRE (centre != nullptr);
-    centre->setText ("350"); centre->onReturnKey();
+    auto* centre = dynamic_cast<juce::Slider*> (findID (*panel, "map-centre")); REQUIRE (centre != nullptr);
+    centre->setValue (350, juce::sendNotificationSync);
     REQUIRE (waitForUI ([&] { return std::abs (p->getMacroMappings()[0].centre - 350) < .01; }));
     auto* mode = dynamic_cast<juce::ComboBox*> (findID (*panel, "map-mode")); REQUIRE (mode != nullptr);
     mode->setSelectedItemIndex (1, juce::sendNotificationSync);
@@ -1848,6 +1848,10 @@ TEST_CASE ("Notes is a single editable Markdown area with preview, independent o
 #include "FormulaRoutingTests.h"
 #include "RandomPresetTests.h"
 #include "PresetResetUiTests.h"
+#include "CurveGridUiTests.h"
+#include "MappingDetailsUiTests.h"
+#include "FormulaPopoutUiTests.h"
+#include "ColourPaletteUiTests.h"
 
 int main (int argc, char** argv)
 {
@@ -1859,6 +1863,7 @@ int main (int argc, char** argv)
     scrr::gui::PromptLanguage::testPreferenceDirectory = preferences;
     juce::ScopedJuceInitialiser_GUI gui;
     scrr::gui::PromptLanguage::set (scrr::gui::PromptLanguage::Language::english, false);
+    if (argc > 2 && juce::String (argv[1]) == "--render-v026") return renderV026Ui (juce::File (argv[2])) ? 0 : 1;
     if (argc > 2 && juce::String (argv[1]) == "--render-v020") return renderV020Ui (juce::File (argv[2]));
     if (argc > 2 && juce::String (argv[1]) == "--render-effect-motion") return renderEffectMotion (juce::File (argv[2]));
     if (argc > 2 && juce::String (argv[1]) == "--render-spectral-upgrade") return renderSpectralUpgradeUi (juce::File (argv[2]));

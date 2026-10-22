@@ -8,6 +8,7 @@
 #include "PromptLanguage.h"
 #include "../PluginProcessor.h"
 #include "components/CurveCoordinateMenu.h"
+#include "CurveGridSettings.h"
 #include <deque>
 
 namespace scrr::gui {
@@ -20,7 +21,17 @@ public:
     std::function<void(scrr::params::ModulationSource)> changed;
     std::function<void(juce::Component&, uint32_t)> nodeMenu;
     void setPreviewSource (const scrr::params::ModulationSource& next) { previewSource = next; repaint(); }
-    ModulationCurve() { setTooltip ("Double-click empty space: add. Double-click a point: delete (endpoints stay). Right-click a point: assign X or Y to a Macro or modulation source. Drag a hollow midpoint to bend the segment."); }
+    ModulationCurve()
+    {
+        addAndMakeVisible (grid);
+       #if JUCE_MAC
+        const juce::String snapKey = "Cmd";
+       #else
+        const juce::String snapKey = "Alt";
+       #endif
+        setTooltip ("Double-click empty space: add. Double-click a point: delete (endpoints stay). Right-click a point: assign X or Y to a Macro or modulation source. Right-click empty space or use GRID to set X/Y divisions. Drag a hollow midpoint to bend the segment. Hold " + snapKey + " while dragging to snap both axes to the grid.");
+    }
+    void resized() override { grid.setBounds (getWidth() - 116, 3, 44, 18); }
     void tick (float value, float phase)
     {
         output = value; playhead = phase;
@@ -31,8 +42,7 @@ public:
     {
         const auto a = plot(); const auto accent = source.enabled ? (source.envelope ? Theme::yellow() : source.random ? Theme::red() : Theme::blue()) : Theme::inactive();
         g.fillAll (Theme::field()); g.setColour (Theme::line());
-        for (int i = 0; i <= 8; ++i) g.drawVerticalLine ((int) (a.getX() + a.getWidth() * (float) i / 8), a.getY(), a.getBottom());
-        for (int i = 0; i <= 4; ++i) g.drawHorizontalLine ((int) (a.getY() + a.getHeight() * (float) i / 4), a.getX(), a.getRight());
+        CurveGridSettings::drawGrid (g, a);
         juce::Path line;
         if (source.envelope || source.random)
         {
@@ -90,7 +100,8 @@ public:
             selected = curveSegment = -1;
             if (source.shape != 5) return;
             const int point = nearest (e.position);
-            if (point >= 0 && nodeMenu) nodeMenu (*this, source.points[(size_t) point].id);
+            if (point >= 0) { if (nodeMenu) nodeMenu (*this, source.points[(size_t) point].id); }
+            else CurveGridSettings::showMenu (*this);
             return;
         }
         ensureCustom(); selected = -1; curveSegment = -1;
@@ -110,8 +121,14 @@ public:
         }
         if (selected < 0 || selected >= (int) source.points.size()) return;
         auto& p = source.points[(size_t) selected]; const auto a = plot();
-        p.y = juce::jlimit (0.0f, 1.0f, (a.getBottom() - e.position.y) / a.getHeight());
-        if (selected > 0 && selected + 1 < (int) source.points.size()) p.x = juce::jlimit (source.points[(size_t) selected - 1].x + .001f, source.points[(size_t) selected + 1].x - .001f, (e.position.x - a.getX()) / a.getWidth());
+        float x = (e.position.x - a.getX()) / a.getWidth(), y = (a.getBottom() - e.position.y) / a.getHeight();
+        if (CurveGridSettings::shouldSnap (e.mods))
+        { const auto counts = CurveGridSettings::get(); x = CurveGridSettings::snap (x, counts.x); y = CurveGridSettings::snap (y, counts.y); }
+        if (selected > 0 && selected + 1 < (int) source.points.size())
+            p.x = CurveGridSettings::shouldSnap (e.mods)
+                ? CurvePointEditing::snapX (x, p.x, source.points[(size_t) selected - 1].x, source.points[(size_t) selected + 1].x, CurveGridSettings::get().x)
+                : CurvePointEditing::constrainX (x, p.x, source.points[(size_t) selected - 1].x, source.points[(size_t) selected + 1].x);
+        p.y = juce::jlimit (0.0f, 1.0f, y);
         submit();
     }
     void mouseDoubleClick (const juce::MouseEvent& e) override
@@ -138,6 +155,7 @@ public:
     void mouseExit (const juce::MouseEvent&) override { hoverSegment = -1; repaint(); }
 private:
     scrr::params::ModulationSource previewSource;
+    CurveGridButton grid;
     juce::Rectangle<float> plot() const { return getLocalBounds().toFloat().reduced (8); }
     juce::Point<float> curveHandle (int segment) const
     {
@@ -168,7 +186,7 @@ private:
         }
         return best;
     }
-    void submit() { if (changed) changed (source); repaint(); }
+    void submit() { CurvePointEditing::normalise (source.points); if (changed) changed (source); repaint(); }
     int selected { -1 }, curveSegment { -1 }, hoverSegment { -1 }, curveStartY {}; float curveStart {}, output {}, playhead {}; std::deque<float> history;
 };
 // A separate handle keeps assigning an output distinct from editing a source

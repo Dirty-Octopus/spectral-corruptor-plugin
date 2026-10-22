@@ -5,7 +5,7 @@ if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 project(SpectralCrrpt
-    VERSION 0.2.5
+    VERSION 0.2.6
     DESCRIPTION "Spectral Corruptor - FFT spectral corruption audio plugin"
     LANGUAGES C CXX)
 

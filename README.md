@@ -18,11 +18,15 @@ A modular spectral audio effect by **dir.oct. / Dirty Octopus**, using C++17 and
 
 All plugin DSP, modules, GUI, macros, modulation, state/preset management and build integration are included. The official licensing backend, cryptographic keys and fixtures, issuer tools, licence files, official binaries and Factory Presets are excluded. The licensing interface and a deliberately unimplemented backend are supplied instead.
 
-**The default build compiles but cannot process input audio.** It outputs only pink noise, including with internal bypass or Dry/Wet at zero. No activation string or official `.sclicense` file can unlock the supplied placeholder. Implement your own backend before using your build. See [licensing integration](docs/LICENSING.md).
+**The default build compiles but cannot process input audio.** It outputs only pink noise, including with internal bypass or Dry/Wet at zero. No activation string, DEMO entry or official `.sclicense` file can unlock the supplied placeholder. The official 48-hour Demo is unavailable in this source build. Implement your own backend before using your build. See [licensing integration](docs/LICENSING.md).
 
-## v0.2.5
+## v0.2.6 - 2026-10-22
 
-This is a source update. The corresponding official binary Release is deferred.
+This source edition includes the v0.2.6 editing improvements. Nearby curve points are retained on insertion; GRID X/Y independently use 1-64 divisions, with Command on macOS / Alt on Windows held during dragging to snap. Mapping response graphs start collapsed and have sliders plus editable numeric values. Formula opens a larger editable, resizable native window by default, or an internal plugin window selected in Settings. Colour slots provide a palette and a live HEX swatch.
+
+Official binaries additionally offer a continuous 48-hour machine Demo with real-time processing and latency-compensated dry audio for host-declared offline renders. Its secure storage and authentication implementation is excluded here; the supplied placeholder remains locked and never starts a Demo.
+
+## FFT, Remap and Partial features
 
 The library now contains 38 audio effects in eight folders. This version adds:
 

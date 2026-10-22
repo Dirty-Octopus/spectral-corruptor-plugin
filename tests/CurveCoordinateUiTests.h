@@ -75,6 +75,7 @@ TEST_CASE ("Mapping response coordinate menu identifies the owning route")
     MacroMapping route; route.uid = "module"; route.routeUid = "owning-response-route";
     route.responseCurve.points = { { 0, 0, 0, 1 }, { .4f, .2f, 0, 7 }, { 1, 1, 0, 2 } };
     scrr::gui::MacroMappingRow row (route); row.setSize (700, 270);
+    row.setCurveExpanded (true);
     juce::String owner; juce::Identifier target;
     row.mappingMenu = [&] (juce::Component&, const juce::String& uid, const juce::Identifier& key) { owner = uid; target = key; };
     auto* graph = dynamic_cast<scrr::gui::TransferCurveEditor*> (findID (row, "map-response-curve")); REQUIRE (graph != nullptr);

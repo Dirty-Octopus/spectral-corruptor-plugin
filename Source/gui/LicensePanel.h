@@ -18,11 +18,12 @@ public:
         code.setMultiLine (true); code.setReturnKeyStartsNewLine (true); code.setScrollbarsShown (true);
         code.setTextToShowWhenEmpty ("Paste a code or drop a .sclicense file here", Theme::dim());
         code.setInputRestrictions (4096); code.setComponentID ("activation-code"); addAndMakeVisible (code);
-        copy.onClick = [this] { juce::SystemClipboard::copyTextToClipboard (license.getMachineCode()); status = "Machine code copied."; repaint(); };
+        copy.onClick = [this] { juce::SystemClipboard::copyTextToClipboard (license.getMachineCode()); showingDemoStatus = false; status = "Machine code copied."; repaint(); };
         activate.onClick = [this]
         {
             const auto result = license.activate (code.getText());
-            status = result.wasOk() ? "ACTIVATED / Normal processing restored." : result.getErrorMessage();
+            showingDemoStatus = result.wasOk() && ! license.isActivated();
+            status = result.wasOk() ? (license.isActivated() ? "ACTIVATED / Normal processing restored." : license.demoStatusText()) : result.getErrorMessage();
             repaint(); if (changed) changed();
         };
         close.onClick = [this] { setVisible (false); };
@@ -33,13 +34,13 @@ public:
     {
         activate.setColour (juce::TextButton::buttonColourId, Theme::yellow());
         activate.setColour (juce::TextButton::textColourOffId, Theme::black());
-        code.setTextToShowWhenEmpty (promptText ("Paste a code or drop a .sclicense file here"), Theme::dim());
+        code.setTextToShowWhenEmpty (promptText ("Paste a code, enter DEMO, or drop a .sclicense file here"), Theme::dim());
         repaint();
     }
     void refreshLanguage()
     {
         machine.setText (license.getMachineCode().isEmpty() ? promptText ("MACHINE ID UNAVAILABLE") : license.getMachineCode());
-        code.setTextToShowWhenEmpty (promptText ("Paste a code or drop a .sclicense file here"), Theme::dim());
+        code.setTextToShowWhenEmpty (promptText ("Paste a code, enter DEMO, or drop a .sclicense file here"), Theme::dim());
         copy.setButtonText (promptText ("COPY")); activate.setButtonText (promptText ("ACTIVATE")); close.setButtonText (promptText ("CLOSE  x")); repaint();
     }
     std::function<void()> changed;
@@ -63,7 +64,8 @@ public:
             const int bytes = stream.read (data, 4097);
             const auto result = bytes > 4096 ? juce::Result::fail ("Licence file is too large.")
                                             : license.activate (juce::String::fromUTF8 (data, bytes));
-            status = result.wasOk() ? "ACTIVATED / Licence file accepted." : result.getErrorMessage();
+            showingDemoStatus = result.wasOk() && ! license.isActivated();
+            status = result.wasOk() ? (license.isActivated() ? "ACTIVATED / Licence file accepted." : license.demoStatusText()) : result.getErrorMessage();
             if (result.wasOk()) code.clear();
             if (changed) changed();
         }
@@ -82,18 +84,21 @@ public:
     {
         g.fillAll (Theme::panel()); g.setColour (Theme::yellow()); g.drawRect (getLocalBounds(), fileHover ? 7 : 3);
         Theme::text (g, promptText ("MACHINE ACTIVATION"), { 24, 20, getWidth() - 145, 40 }, 23, Theme::yellow(), true);
-        Theme::text (g, promptText (license.isActivated() ? "ACTIVATED / THIS MACHINE" : "NOT ACTIVATED / PINK NOISE ONLY"),
-                     { 24, 68, getWidth() - 48, 25 }, 15, license.isActivated() ? Theme::yellow() : Theme::red(), true);
-        Theme::text (g, promptText ("Send this machine code to receive your activation code."), { 24, 103, getWidth() - 48, 24 }, 12, Theme::white());
+        const bool demo = ! license.isActivated() && license.isDemoActive();
+        const auto remaining = license.demoRemainingSeconds();
+        const auto countdown = juce::String (remaining / 3600).paddedLeft ('0', 2) + ":" + juce::String ((remaining / 60) % 60).paddedLeft ('0', 2) + ":" + juce::String (remaining % 60).paddedLeft ('0', 2);
+        const auto headline = demo ? promptText ("DEMO / REMAINING ") + countdown : promptText (license.isActivated() ? "ACTIVATED / THIS MACHINE" : "NOT ACTIVATED / PINK NOISE ONLY");
+        Theme::text (g, headline, { 24, 68, getWidth() - 48, 25 }, 15, license.canProcessRealtime() ? Theme::yellow() : Theme::red(), true);
+        Theme::text (g, promptText ("Enter DEMO for 48 hours. Offline exports bypass to dry audio."), { 24, 103, getWidth() - 48, 24 }, 12, Theme::white());
         Theme::text (g, promptText (fileHover ? "DROP TO ACTIVATE" : "ACTIVATION CODE / DROP .SCLICENSE"), { 24, 192, getWidth() - 48, 22 }, 11, Theme::dim(), true);
         g.setColour (Theme::white()); g.setFont (Theme::font (12));
-        g.drawFittedText (promptText (status), { 24, 378, getWidth() - 48, 48 }, juce::Justification::topLeft, 3);
+        g.drawFittedText (promptText ((showingDemoStatus || status.isEmpty()) && ! license.isActivated() ? license.demoStatusText() : status), { 24, 378, getWidth() - 48, 48 }, juce::Justification::topLeft, 3);
     }
 private:
     licensing::LicenseManager& license;
     juce::TextEditor machine, code;
     juce::TextButton copy { "COPY" }, activate { "ACTIVATE" }, close { "CLOSE  x" };
     juce::String status;
-    bool fileHover {};
+    bool fileHover {}, showingDemoStatus {};
 };
 }

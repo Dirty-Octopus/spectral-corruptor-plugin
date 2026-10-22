@@ -10,7 +10,7 @@ namespace scrr::gui {
 EditorContent::EditorContent (SpectralCrrptProcessor& p)
     : processor (p), presets (p), licensePanel (p.getLicense()), settingsPanel (PromptLanguage::preferenceFile(), &p.getAPVTS()), macroBar (p), macroPanel (p), modulationPage (p), inputSpectrum (p, true), outputSpectrum (p, false)
 {
-    setLookAndFeel (&look); setOpaque (true);
+    setComponentID ("editor-content"); setLookAndFeel (&look); setOpaque (true);
     updates = processor.getUpdateService(); settingsPanel.setUpdateService (updates);
     settingsPanel.hasRecovery = [this] { return processor.hasPresetRecovery(); };
     settingsPanel.restoreRecovery = [this] { if (processor.restorePresetRecovery()) { rebuildRack(); settingsPanel.tick(); } };
@@ -282,7 +282,7 @@ void EditorContent::timerCallback()
         updateNotice.setVisible (newer);
         updateNotice.setButtonText (promptText ("Newer Version Available"));
     }
-    if (! guideConsidered && processor.getLicense().isActivated() && isShowing())
+    if (! guideConsidered && processor.getLicense().canProcessRealtime() && isShowing())
     { guideConsidered = true; if (QuickGuide::shouldShow()) quickGuide.open(); }
     // A host/preset change invalidates the gesture before any preview rebuild
     // can adopt its revision and accidentally make a stale drop look current.
@@ -459,11 +459,13 @@ void EditorContent::timerCallback()
 void EditorContent::updateLicenseStatus()
 {
     const bool licensed = processor.getLicense().isActivated();
-    const juce::String label = licensed ? "ACTIVATED" : "ACTIVATE";
-    licenseButton.setTooltip (promptText (licensed ? "Activated on this machine" : "Not activated: only pink noise is output; input is blocked."));
+    const bool demo = ! licensed && processor.getLicense().isDemoActive();
+    const juce::String label = licensed ? "ACTIVATED" : demo ? "DEMO" : "ACTIVATE";
+    licenseButton.setTooltip (promptText (licensed ? "Activated on this machine" : demo ? "48-hour demo active. Offline exports bypass to dry audio." : "Not activated: only pink noise is output; input is blocked."));
+    if (licensePanel.isVisible()) licensePanel.repaint();
     if (licenseButton.getButtonText() == label) return;
     licenseButton.setButtonText (label);
-    licenseButton.setColour (juce::TextButton::buttonColourId, licensed ? Theme::panel() : Theme::red());
+    licenseButton.setColour (juce::TextButton::buttonColourId, licensed || demo ? Theme::panel() : Theme::red());
 
     licensePanel.repaint(); repaint();
 }
@@ -599,7 +601,7 @@ void EditorContent::refreshTheme()
     processingStatus.setColour (juce::Label::backgroundColourId, Theme::black()); processingStatus.setColour (juce::Label::textColourId, Theme::yellow());
     orderNotice.setColour (juce::Label::backgroundColourId, Theme::black()); orderNotice.setColour (juce::Label::textColourId, Theme::yellow());
     orderNotice.setColour (juce::Label::outlineColourId, Theme::yellow());
-    licenseButton.setColour (juce::TextButton::buttonColourId, processor.getLicense().isActivated() ? Theme::panel() : Theme::red());
+    licenseButton.setColour (juce::TextButton::buttonColourId, processor.getLicense().canProcessRealtime() ? Theme::panel() : Theme::red());
     macroBar.refreshColours(); presets.refreshColours(); licensePanel.refreshColours();
     inputSpectrum.refreshColours(); outputSpectrum.refreshColours();
     rebuildInspector(); resized(); sendLookAndFeelChange(); repaint();
@@ -1277,7 +1279,8 @@ void EditorContent::paint (juce::Graphics& g)
     g.setColour (Theme::black()); g.setFont (Theme::displayFont (48));
     g.drawText ("SPECTRAL CORRUPTOR", headerArea.reduced (16, 0).withTrimmedRight (264).withHeight (55), juce::Justification::centredLeft);
     Theme::text (g, processor.getLicense().isActivated() ? "FREQUENCY DOMAIN  /  MODULAR SIGNAL PROCESSOR"
-                                                       : "NOT ACTIVATED  /  PINK NOISE ONLY  /  INPUT BLOCKED",
+                    : processor.getLicense().isDemoActive() ? "48-HOUR DEMO  /  OFFLINE EXPORT: DRY BYPASS"
+                                                            : "NOT ACTIVATED  /  PINK NOISE ONLY  /  INPUT BLOCKED",
                  headerArea.reduced (17, 0).withTrimmedTop (48), 11, Theme::black(), true);
     auto mark = juce::Rectangle<int> (headerArea.getRight() - 264, headerArea.getY(), 180, headerArea.getHeight());
     g.setColour (Theme::yellow()); g.fillRect (mark);
